@@ -205,6 +205,20 @@ class LimitedSets:
             for name, info in sets_object.data.items():
                 if "Cube" in name:
                     info.set_code = name.replace(" ", "").upper()
+                elif (
+                    info.seventeenlands
+                    and info.seventeenlands[0]
+                    and (
+                        not info.set_code
+                        or (
+                            info.arena == [constants.SET_SELECTION_ALL]
+                            and info.set_code == name.split(" ")[0].upper()
+                        )
+                    )
+                ):
+                    # Older Scryfall-only entries inferred REALITY from the
+                    # display name. Arena events use the expansion code FRA.
+                    info.set_code = info.seventeenlands[0].split(" ")[0].upper()
                 elif not info.set_code:
                     info.set_code = name.split(" ")[0].upper()
 
@@ -234,10 +248,15 @@ class LimitedSets:
             self.limited_sets = read_sets
 
     def __append_limited_sets(self, read_sets: SetDictionary) -> SetDictionary:
-        temp_dict = SetDictionary(version=LIMITED_SETS_VERSION)
+        # Keep cached/custom entries, then replace known sets with fresh API
+        # metadata. A pre-release fallback must not overwrite live formats,
+        # start dates or set codes once 17Lands starts reporting the set.
+        temp_dict = SetDictionary(
+            version=LIMITED_SETS_VERSION, data=read_sets.data.copy()
+        )
         alchemy_sets = {}
 
-        if self.sets_scryfall.data and self.sets_17lands.data:
+        if self.sets_17lands.data:
             set_codes_to_remove = []
 
             for set_name, set_fields in self.sets_scryfall.data.items():
@@ -261,7 +280,6 @@ class LimitedSets:
                     else:
                         temp_dict.data[set_code] = set_fields
 
-        temp_dict.data.update(read_sets.data)
         temp_dict.data.update(alchemy_sets)
         temp_dict.latest_set = str(read_sets.latest_set)  # Cast to str for tests
         return temp_dict
@@ -320,6 +338,9 @@ class LimitedSets:
                             arena=[constants.SET_SELECTION_ALL],
                             seventeenlands=[set_code.upper()],
                         )
+                    self.sets_scryfall.data[set_name].set_code = (
+                        self.sets_scryfall.data[set_name].seventeenlands[0]
+                    )
                     counter += 1
             except Exception as error:
                 logger.error(error)

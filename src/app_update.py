@@ -16,7 +16,7 @@ logger = create_logger()
 DOWNLOADS_FOLDER = os.path.join(BASE_DIR, "Downloads")
 
 UPDATE_LATEST_URL = (
-    "https://api.github.com/repos/unrealities/MTGA_Draft_17Lands/releases/latest"
+    "https://api.github.com/repos/dkacz/MTGA_Draft_17Lands/releases/latest"
 )
 
 if sys.platform == "darwin":

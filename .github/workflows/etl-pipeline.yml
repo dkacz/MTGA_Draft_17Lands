@@ -1,10 +1,9 @@
 name: Daily Dataset ETL Pipeline
 
 on:
-  schedule:
-    # Runs at 10:00 AM UTC every day (Adjust as needed)
-    - cron: "0 10 * * *"
-  workflow_dispatch: # Allows manual triggering from the GitHub UI
+  # Automatic collection is disabled in this fork. Review 17Lands' data-use
+  # permission and public dataset availability before activating the ETL.
+  workflow_dispatch:
 
 permissions:
   contents: write # Required to push to the gh-pages branch
