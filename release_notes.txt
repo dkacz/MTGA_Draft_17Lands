@@ -1,3 +1,10 @@
+===================== RELEASE NOTES 4.22 (FRA fork) =====================
+* dkacz: Fixed new-set codes inferred from display names, including cached Reality Fracture entries using REALITY instead of FRA.
+* dkacz: Fresh 17Lands set metadata now replaces stale pre-release cache entries, including formats and release dates.
+* dkacz: Sets discovered through 17Lands remain available if Scryfall metadata is unavailable.
+* dkacz: Added the official Reality Fracture event schedule through November 9, including both Quick Draft windows.
+* dkacz: Application update checks now use this fork's releases. The optional ETL has not been activated and no FRA card-rating data is republished.
+
 ===================== RELEASE NOTES 4.21 =====================
 * unrealities: [Bug] Fixed Cube dataset downloads reporting the correct game count (e.g. 99,513 games for the Latest Event) but then warning that 0 cards matched. The card-data request uppercased the 17Lands expansion name ("CUBE - POWERED"), which 17Lands matches case-sensitively and answers with an empty list; the name is now sent exactly as 17Lands lists it. Also affects Cube, Cube - Planar, Chaos, Ravnica and Remix - Artifacts.
 * unrealities: [Bug] Because every fresh Cube download had been coming back empty, "All Time" Cube datasets in the tool were stale files from earlier versions and were missing cards added to the cube since. Re-download the Cube dataset after updating to pick up the current card pool; "All Time" now includes every card from the latest event.

@@ -206,26 +206,34 @@ CHECKED_SETS_COMBINED = {
 
 CHECKED_SETS_SCRYFALL = {
     "Through the Omenpaths": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["OM1"]
+        arena=["ALL"], scryfall=[], seventeenlands=["OM1"], set_code="OM1"
     ),
     "Outlaws of Thunder Junction": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["OTJ"]
+        arena=["ALL"], scryfall=[], seventeenlands=["OTJ"], set_code="OTJ"
     ),
-    "Wilds of Eldraine": SetInfo(arena=["ALL"], scryfall=[], seventeenlands=["WOE"]),
-    "March of the Machine": SetInfo(arena=["ALL"], scryfall=[], seventeenlands=["MOM"]),
+    "Wilds of Eldraine": SetInfo(
+        arena=["ALL"], scryfall=[], seventeenlands=["WOE"], set_code="WOE"
+    ),
+    "March of the Machine": SetInfo(
+        arena=["ALL"], scryfall=[], seventeenlands=["MOM"], set_code="MOM"
+    ),
     "March of the Machine: The Aftermath": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["MAT"]
+        arena=["ALL"], scryfall=[], seventeenlands=["MAT"], set_code="MAT"
     ),
     "Shadows over Innistrad Remastered": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["SIR"]
+        arena=["ALL"], scryfall=[], seventeenlands=["SIR"], set_code="SIR"
     ),
     "Phyrexia: All Will Be One": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["ONE"]
+        arena=["ALL"], scryfall=[], seventeenlands=["ONE"], set_code="ONE"
     ),
-    "Alchemy: Phyrexia": SetInfo(arena=["ALL"], scryfall=[], seventeenlands=["Y23ONE"]),
-    "The Brothers' War": SetInfo(arena=["ALL"], scryfall=[], seventeenlands=["BRO"]),
+    "Alchemy: Phyrexia": SetInfo(
+        arena=["ALL"], scryfall=[], seventeenlands=["Y23ONE"], set_code="Y23ONE"
+    ),
+    "The Brothers' War": SetInfo(
+        arena=["ALL"], scryfall=[], seventeenlands=["BRO"], set_code="BRO"
+    ),
     "Alchemy: The Brothers' War": SetInfo(
-        arena=["ALL"], scryfall=[], seventeenlands=["Y23BRO"]
+        arena=["ALL"], scryfall=[], seventeenlands=["Y23BRO"], set_code="Y23BRO"
     ),
 }
 
@@ -928,3 +936,109 @@ def test_substitute_string_date_shift(mock_cache, mock_urlopen, limited_sets):
         mock_date.min = datetime.date.min
         output_sets = limited_sets.retrieve_limited_sets()
     assert "Cube" in output_sets.data
+
+
+def fra_filters():
+    return {
+        "expansions": ["FRA"],
+        "start_dates": {"FRA": "2026-09-29T15:00:00Z"},
+        "formats_by_expansion": {
+            "FRA": ["PremierDraft", "TradDraft", "PickTwoDraft", "Sealed", "TradSealed"]
+        },
+    }
+
+
+def fra_scryfall_sets():
+    return {
+        "data": [{"name": "Reality Fracture", "code": "fra", "set_type": "expansion"}],
+        "has_more": False,
+    }
+
+
+@patch("src.limited_sets.urllib.request.urlopen")
+def test_new_scryfall_set_uses_expansion_code(mock_urlopen, tmp_path):
+    """Arena identifies a new set by its code before 17Lands lists it."""
+    sets = LimitedSets(str(tmp_path / "sets.json"))
+    filters = {
+        "expansions": ["HOB"],
+        "start_dates": {"HOB": "2026-08-11T15:00:00Z"},
+        "formats_by_expansion": {"HOB": ["PremierDraft"]},
+    }
+    mock_urlopen.return_value.read.side_effect = [
+        json.dumps(filters).encode(),
+        json.dumps(fra_scryfall_sets()).encode(),
+    ]
+
+    result = sets.retrieve_limited_sets()
+
+    assert result.data["Reality Fracture"].set_code == "FRA"
+    assert result.data["Reality Fracture"].seventeenlands == ["FRA"]
+
+
+@pytest.mark.parametrize("old_code", ["", "REALITY"])
+def test_cached_new_set_repairs_inferred_code(tmp_path, old_code):
+    sets = LimitedSets(str(tmp_path / "sets.json"))
+    cached = SetDictionary(
+        data={
+            "Reality Fracture": SetInfo(
+                arena=["ALL"], seventeenlands=["FRA"], set_code=old_code
+            ),
+            "Custom Event": SetInfo(
+                arena=["FRA", "SPG"], seventeenlands=["FRA"], set_code="CUSTOM"
+            ),
+        }
+    )
+    assert sets.write_sets_file(cached)
+
+    result = sets.retrieve_limited_sets()
+
+    assert result.data["Reality Fracture"].set_code == "FRA"
+    assert result.data["Custom Event"].set_code == "CUSTOM"
+    assert result.data["Custom Event"].arena == ["FRA", "SPG"]
+
+
+@patch("src.limited_sets.urllib.request.urlopen")
+def test_fresh_17lands_metadata_replaces_cached_fallback(mock_urlopen, tmp_path):
+    sets = LimitedSets(str(tmp_path / "sets.json"))
+    cached = SetDictionary(
+        latest_set="HOB",
+        data={
+            "Reality Fracture": SetInfo(
+                arena=["ALL"], seventeenlands=["FRA"], set_code="REALITY"
+            ),
+            "Custom Event": SetInfo(
+                arena=["FRA", "SPG"], seventeenlands=["FRA"], set_code="CUSTOM"
+            ),
+        },
+    )
+    assert sets.write_sets_file(cached)
+    mock_urlopen.return_value.read.side_effect = [
+        json.dumps(fra_filters()).encode(),
+        json.dumps(fra_scryfall_sets()).encode(),
+    ]
+
+    with patch.object(sets, "_is_cache_valid", return_value=False):
+        result = sets.retrieve_limited_sets()
+
+    fra = result.data["Reality Fracture"]
+    assert fra.set_code == "FRA"
+    assert fra.start_date == "2026-09-29"
+    assert "PremierDraft" in fra.formats
+    assert result.latest_set == "FRA"
+    assert result.special_events[0].set_code == "FRA"
+    assert result.data["Custom Event"] == cached.data["Custom Event"]
+
+
+@patch("src.limited_sets.urllib.request.urlopen")
+def test_17lands_set_available_without_scryfall_metadata(mock_urlopen, tmp_path):
+    sets = LimitedSets(str(tmp_path / "sets.json"))
+    mock_urlopen.return_value.read.side_effect = [
+        json.dumps(fra_filters()).encode(),
+        b'{"data": [], "has_more": false}',
+    ]
+
+    result = sets.retrieve_limited_sets()
+
+    assert result.data["FRA"].set_code == "FRA"
+    assert result.data["FRA"].start_date == "2026-09-29"
+    assert "PremierDraft" in result.data["FRA"].formats

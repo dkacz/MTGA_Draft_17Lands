@@ -588,6 +588,56 @@
             ],
             "start_date": "2026-09-19",
             "end_date": "2026-09-20"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "PremierDraft",
+                "TradDraft",
+                "PickTwoDraft"
+            ],
+            "start_date": "2026-09-29",
+            "end_date": "2026-11-09"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "Sealed"
+            ],
+            "start_date": "2026-09-29",
+            "end_date": "2026-10-27"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "TradSealed"
+            ],
+            "start_date": "2026-09-29",
+            "end_date": "2026-10-13"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "QuickDraft"
+            ],
+            "start_date": "2026-10-08",
+            "end_date": "2026-10-18"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "QuickDraft"
+            ],
+            "start_date": "2026-10-27",
+            "end_date": "2026-11-06"
+        },
+        {
+            "set_code": "FRA",
+            "formats": [
+                "ContenderDraft"
+            ],
+            "start_date": "2026-10-13",
+            "end_date": "2026-11-09"
         }
     ]
 }

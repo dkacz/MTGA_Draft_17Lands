@@ -1,5 +1,32 @@
 # MTGA_Draft_17Lands
 
+## Reality Fracture (FRA) fork
+
+[Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
+
+Version 4.22 fixes new-set recognition for Reality Fracture: Arena events use
+`FRA`, and older cached entries incorrectly inferred `REALITY` from the display
+name. Existing caches are repaired when read, and fresh 17Lands metadata now
+replaces pre-release fallback entries. Sets reported by 17Lands remain available
+when Scryfall metadata is unavailable.
+
+Reality Fracture is selectable in **Datasets** with the **All Time** period.
+Early card statistics can be missing until enough games have been recorded.
+The server calendar includes FRA Premier, Traditional, Pick-Two, Contender,
+Quick Draft, and Sealed dates from the
+[official Arena schedule](https://magic.wizards.com/en/news/mtg-arena/reality-fracture-event-schedule).
+
+Automatic cloud synchronization currently uses the upstream warehouse. This
+fork's optional ETL workflow has not been activated, and no FRA rating datasets
+are included or republished here. The 17Lands API currently restricts its curated
+data to use on its own site and directs external use to
+[public datasets](https://www.17lands.com/public_datasets); FRA public downloads
+were not yet listed on October 1, 2026. Follow the
+[17Lands usage guidelines](https://www.17lands.com/usage_guidelines) and obtain
+any required permission before activating data collection or redistribution.
+
+The original project's documentation follows below.
+
 Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 
 **This application will automatically support new sets as soon as the sets are released on Arena _and_ the data is available on the [17Lands card ratings](https://www.17lands.com/card_ratings) page.**
