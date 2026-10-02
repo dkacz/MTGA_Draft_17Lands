@@ -1,3 +1,9 @@
+===================== RELEASE NOTES 4.23 (FRA fork) =====================
+* dkacz: Refreshing a manual dataset now replaces the previous download for the same set, draft format, player group, and time-period preset instead of creating another daily snapshot.
+* dkacz: Existing duplicate snapshots now resolve to the newest end date and collection time in the scanner, dataset selectors, and Datasets table.
+* dkacz: Dataset exports are validated before atomic replacement; failed writes preserve the previous file and active selection. Matching legacy daily snapshots are removed only after a successful export.
+* dkacz: Different periods, player groups, formats, and legacy custom date ranges remain separate.
+
 ===================== RELEASE NOTES 4.22 (FRA fork) =====================
 * dkacz: Fixed new-set codes inferred from display names, including cached Reality Fracture entries using REALITY instead of FRA.
 * dkacz: Fresh 17Lands set metadata now replaces stale pre-release cache entries, including formats and release dates.

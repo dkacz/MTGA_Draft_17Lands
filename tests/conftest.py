@@ -3,15 +3,40 @@ tests/conftest.py
 Global pytest configuration and fixtures.
 """
 
+import atexit
+from pathlib import Path
+import sys
+import tempfile
+from unittest.mock import patch
+
 import pytest
 import tkinter
+
+from src import constants
+
+# Bind configuration defaults before UI/test imports during collection. A later
+# fixture cannot redirect file paths already bound in function default arguments.
+if "src.configuration" in sys.modules:
+    raise RuntimeError("Test configuration must be isolated before src.configuration is imported")
+
+_test_config_dir = tempfile.TemporaryDirectory(prefix="mtga-draft-tool-tests-")
+atexit.register(_test_config_dir.cleanup)
+_test_config_path = Path(_test_config_dir.name) / "config.json"
+_test_config_path.write_text("{}", encoding="utf-8")
+with patch.object(constants, "BASE_DIR", _test_config_dir.name):
+    import src.configuration
+
 from src.ui.styles import Theme
-from unittest.mock import patch
 from ttkbootstrap.style import StyleBuilderTTK
 
 
 # Global singleton for Tkinter root
 _shared_root = None
+
+
+@pytest.fixture(scope="session")
+def isolated_config_path():
+    return _test_config_path
 
 
 @pytest.fixture(autouse=True)
