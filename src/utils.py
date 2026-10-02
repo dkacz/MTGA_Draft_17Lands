@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import platform
 import subprocess
@@ -205,6 +206,36 @@ def retrieve_local_set_list(codes=None, names=None):
         )
 
     return file_list, error_list
+
+
+def latest_local_set_files(file_list):
+    """Return the newest snapshot per set, event, and displayed player group."""
+    # Dataset dates are ISO strings. Collection time breaks same-end-date ties;
+    # the path provides a deterministic final tie regardless of directory order.
+    newest_first = sorted(
+        file_list,
+        key=lambda f: (
+            str(f[4] or ""),
+            str(f[7] or "").replace("T", " "),
+            str(f[6]),
+        ),
+        reverse=True,
+    )
+    selected = []
+    seen = set()
+    for file in newest_first:
+        name_segments = os.path.basename(file[6]).split("_")
+        # Filtered lists can display full set names, so use the filename's code.
+        set_code = (
+            name_segments[0]
+            if len(name_segments) in (4, 5) and name_segments[-1] == SET_FILE_SUFFIX
+            else file[0]
+        )
+        key = (re.sub(r"[^A-Z0-9]", "", str(set_code).upper()), file[1], file[2])
+        if key not in seen:
+            seen.add(key)
+            selected.append(file)
+    return selected
 
 
 def check_file_integrity(filename):

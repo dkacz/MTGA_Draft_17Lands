@@ -4,6 +4,10 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.23 replaces manual datasets when the same set, format, player group,
+and time period are downloaded again. Existing duplicate snapshots resolve to
+the newest data, and failed exports preserve the previous usable dataset.
+
 Version 4.22 fixes new-set recognition for Reality Fracture: Arena events use
 `FRA`, and older cached entries incorrectly inferred `REALITY` from the display
 name. Existing caches are repaired when read, and fresh 17Lands metadata now

@@ -199,6 +199,93 @@ class TestDownloadPanel:
             "Dataset Download Complete", "Success Message!"
         )
 
+    @patch("src.ui.windows.download.write_configuration")
+    @patch("src.ui.windows.download.FileExtractor")
+    def test_failed_export_keeps_active_dataset(
+        self, mock_ex_cls, mock_write, root, mock_sets_data, config
+    ):
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+        config.card_data.latest_dataset = "OTJ_PremierDraft_All_Data.json"
+        mock_ex = mock_ex_cls.return_value
+        mock_ex.retrieve_17lands_color_ratings.return_value = (True, 100)
+        mock_ex.download_card_data.return_value = (True, "Downloaded", 100)
+        mock_ex.export_card_data.return_value = ""
+        ctx = {
+            "db_loc": "/mock",
+            "threshold": 500,
+            "set_key": "Outlaws",
+            "event": "PremierDraft",
+            "start": "2024-04-16",
+            "end": "2024-05-01",
+            "time_period": "ALL_TIME",
+            "group": "All",
+        }
+
+        with patch.object(panel, "_safe_error") as error, patch.object(
+            panel, "_safe_finalize"
+        ) as finalize:
+            panel._run_download_process(None, ctx)
+
+        assert config.card_data.latest_dataset == "OTJ_PremierDraft_All_Data.json"
+        mock_write.assert_not_called()
+        error.assert_called_once()
+        finalize.assert_not_called()
+
+    @patch("src.ui.windows.download.write_configuration")
+    @patch("src.ui.windows.download.FileExtractor")
+    def test_refresh_of_active_filename_still_notifies_dataset_loader(
+        self, mock_ex_cls, mock_write, root, mock_sets_data, config
+    ):
+        on_update = MagicMock()
+        panel = DownloadWindow(root, mock_sets_data, config, on_update)
+        filename = "OTJ_PremierDraft_All_Custom-AllTime_Data.json"
+        config.card_data.latest_dataset = filename
+        mock_ex = mock_ex_cls.return_value
+        mock_ex.retrieve_17lands_color_ratings.return_value = (True, 100)
+        mock_ex.download_card_data.return_value = (True, "Downloaded", 100)
+        mock_ex.export_card_data.return_value = filename
+        ctx = {
+            "db_loc": "/mock",
+            "threshold": 500,
+            "set_key": "Outlaws",
+            "event": "PremierDraft",
+            "start": "2024-04-16",
+            "end": "2024-05-01",
+            "time_period": "ALL_TIME",
+            "group": "All",
+        }
+
+        with patch.object(panel, "after", side_effect=lambda delay, fn: fn()):
+            panel._run_download_process(None, ctx)
+
+        assert config.card_data.latest_dataset == filename
+        mock_write.assert_called_once_with(config)
+        on_update.assert_called_once()
+
+    @pytest.mark.parametrize("newest_first", [True, False])
+    @patch("src.ui.windows.download.retrieve_local_set_list")
+    def test_table_shows_latest_snapshot_once(
+        self, mock_retrieve, newest_first, root, mock_sets_data, config
+    ):
+        old = (
+            "Outlaws", "PremierDraft", "All (All Time)", "2024-04-16",
+            "2024-05-01", 100,
+            "/mock/OTJ_PremierDraft_All_Custom-AllTime-20240501_Data.json",
+            "2024-05-01 09:00:00",
+        )
+        new = (
+            "Outlaws", "PremierDraft", "All (All Time)", "2024-04-16",
+            "2024-05-02", 200,
+            "/mock/OTJ_PremierDraft_All_Custom-AllTime-20240502_Data.json",
+            "2024-05-02 09:00:00",
+        )
+        mock_retrieve.return_value = ([new, old] if newest_first else [old, new], [])
+        config.card_data.latest_dataset = new[6].split("/")[-1]
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+
+        assert panel.table.get_children() == (new[6],)
+        assert "active_dataset_card" in panel.table.item(new[6], "tags")
+
     @patch("tkinter.messagebox.showerror")
     def test_failed_download_callback_routing(
         self, mock_err, root, mock_sets_data, config

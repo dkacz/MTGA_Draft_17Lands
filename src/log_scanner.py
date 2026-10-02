@@ -23,6 +23,7 @@ from src.utils import (
     process_json,
     json_find,
     retrieve_local_set_list,
+    latest_local_set_files,
     detect_string,
     normalize_color_string,
 )
@@ -1103,6 +1104,7 @@ class ArenaScanner:
         data_sources = {}
         try:
             file_list, error_list = retrieve_local_set_list()
+            file_list = latest_local_set_files(file_list)
             if self.draft_type != constants.LIMITED_TYPE_UNKNOWN:
                 found_types = [
                     k

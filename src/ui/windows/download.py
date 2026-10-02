@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from src import constants
 from src.configuration import write_configuration
 from src.file_extractor import FileExtractor
-from src.utils import retrieve_local_set_list, read_local_manifest
+from src.utils import retrieve_local_set_list, read_local_manifest, latest_local_set_files
 from src.ui.components import DynamicTreeviewManager, AutoScrollbar
 from src.ui.styles import Theme
 
@@ -421,7 +421,7 @@ class DownloadWindow(ttk.Frame):
 
         active_filename = self.configuration.card_data.latest_dataset
 
-        for idx, row in enumerate(sorted(files, key=lambda x: x[7], reverse=True)):
+        for idx, row in enumerate(latest_local_set_files(files)):
             filepath = row[6]
             filename = os.path.basename(filepath)
 
@@ -497,7 +497,13 @@ class DownloadWindow(ttk.Frame):
             if suc:
                 success, msg, _ = ex.download_card_data(0)
                 if success:
-                    self.configuration.card_data.latest_dataset = ex.export_card_data()
+                    filename = ex.export_card_data()
+                    if not filename:
+                        self._safe_error(
+                            "Couldn't save the dataset. The previously active dataset was kept."
+                        )
+                        return
+                    self.configuration.card_data.latest_dataset = filename
                     write_configuration(self.configuration)
                     self._safe_finalize(msg)
                 else:

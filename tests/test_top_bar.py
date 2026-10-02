@@ -145,6 +145,55 @@ def test_update_data_sources(mock_retrieve, root, mock_app_context):
         pytest.fail("Dropdown menu was empty!")
 
 
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    "older_end_date, older_collection_date",
+    [
+        ("2026-10-01", "2026-10-03 20:00:00"),
+        ("2026-10-02", "2026-10-02 08:00:00"),
+    ],
+)
+def test_update_data_sources_loads_newest_snapshot(
+    root, mock_app_context, reverse_order, older_end_date, older_collection_date
+):
+    app = mock_app_context
+    app._initialized = False
+    top_bar = TopBarControls(root, app)
+    app.vars["selected_group"].set("All (All Time)")
+    app._initialized = True
+    app.active_event_set = "M10"
+    app.active_event_type = "PremierDraft"
+    app.current_draft_id = None
+    app.orchestrator.scanner.current_draft_id = None
+    app.orchestrator.new_event_detected = False
+    app.configuration.card_data.latest_dataset = "older.json"
+    older = (
+        "m-10", "PremierDraft", "All (All Time)", "2019-01-01",
+        older_end_date, 100, "/older.json", older_collection_date,
+    )
+    newest = (
+        "M10", "PremierDraft", "All (All Time)", "2019-01-01",
+        "2026-10-02", 200, "/newest.json", "2026-10-02 18:00:00",
+    )
+    file_list = [older, newest]
+    if reverse_order:
+        file_list.reverse()
+
+    with (
+        patch("src.ui.top_bar.retrieve_local_set_list", return_value=(file_list, [])),
+        patch("src.ui.top_bar.write_configuration"),
+        patch.object(top_bar, "update_history_dropdown"),
+        patch.object(top_bar, "update_deck_filter_options"),
+    ):
+        top_bar.update_data_sources()
+
+    assert app.current_set_data_map == {
+        "PremierDraft": {"All (All Time)": "/newest.json"}
+    }
+    app.orchestrator.scanner.retrieve_set_data.assert_called_once_with("/newest.json")
+    assert app.configuration.card_data.latest_dataset == "newest.json"
+
+
 def test_update_deck_filter_options(root, mock_app_context):
     """Verify the filter dropdown pulls Archetype/Color data from the active dataset."""
     top_bar = TopBarControls(root, mock_app_context)
