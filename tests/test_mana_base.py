@@ -186,3 +186,180 @@ def test_greedy_double_pip_bomb_splash(mock_metrics):
     assert stats["cast_t2"] > 40.0, (
         "Core WB velocity destroyed by splash! Auto-Lands allocated basics poorly."
     )
+
+
+def test_role_tag_does_not_manufacture_any_color_sources():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    cards = [
+        {"name": "Unknown ramp spell", "types": ["Creature"],
+         "colors": ["G"], "tags": ["fixing_ramp"]},
+        {"name": "Unknown land", "types": ["Land"],
+         "tags": ["fixing_ramp"]},
+        {"name": "Color chooser", "types": ["Artifact"],
+         "oracle_text": "Choose a color. Creatures of that color get +1/+1."},
+    ]
+    assert count_fixing(cards) == dict.fromkeys("WUBRG", 0)
+    assert ManaSourceAnalyzer(cards).total_fixing_cards == 0
+
+
+def test_fra_production_colors_require_actual_evidence():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    cards = [
+        {"name": "Aerid Konstrari", "types": ["Creature"], "colors": ["R", "G"],
+         "oracle_text": "When this creature enters or dies, create a Heartwood token."},
+        {"name": "Greenhouse Propagator", "types": ["Creature"], "colors": ["G"],
+         "oracle_text": "{T}: Add {G}."},
+        {"name": "Konstrari Charm", "types": ["Instant"], "colors": ["R", "G"],
+         "tags": ["fixing_ramp"], "oracle_text": "Choose one — Add {C}{C}{C}."},
+    ]
+    assert count_fixing(cards) == {"W": 0, "U": 0, "B": 0, "R": 1, "G": 2}
+    assert ManaSourceAnalyzer(cards).any_color_sources == 0
+
+
+def test_created_token_rules_supply_only_their_produced_colors():
+    from src.advisor.mana_base import count_fixing
+
+    card = {"types": ["Creature"], "oracle_text": "Create a Twin token.",
+            "produced_tokens": [{"name": "Twin", "oracle_text": "{T}: Add {U} or {B}."}],
+            "prepared_spell": {"oracle_text": "Create a Treasure token."}}
+    assert count_fixing([card]) == {"W": 0, "U": 1, "B": 1, "R": 0, "G": 0}
+
+
+def test_known_fetches_and_universal_sources_remain_distinct():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    restricted = {"name": "Riveteers Overlook", "types": ["Land"], "count": 2}
+    assert count_fixing([restricted]) == {"W": 0, "U": 0, "B": 2, "R": 2, "G": 2}
+    assert ManaSourceAnalyzer([restricted]).total_fixing_cards == 2
+    cards = [restricted, {"name": "Guild Globe", "types": ["Artifact"]},
+             {"types": ["Creature"], "oracle_text": "Create two Treasure tokens."}]
+    assert count_fixing(cards) == {"W": 2, "U": 2, "B": 4, "R": 4, "G": 4}
+
+
+def test_primary_cost_is_used_for_castability_and_basic_allocation():
+    from src.advisor.mana_base import is_castable
+
+    card = {"colors": ["B", "R"], "types": ["Creature", "Sorcery"],
+            "main_face": {"colors": ["R"], "types": ["Creature"],
+                          "mana_cost": "{2}{R}", "cmc": 3},
+            "prepared_spell": {"mana_cost": "{1}{B}{B}", "cmc": 3}}
+    assert is_castable(card, ["R"])
+    assert not is_castable({"mana_cost": "{U}"}, ["R"])
+    basics = calculate_dynamic_mana_base([card], [], ["R"], forced_count=17)
+    assert {land["name"] for land in basics} == {"Mountain"}
+
+
+def test_persistent_ramp_excludes_one_shot_mana_and_unknown_tags():
+    from src.advisor.mana_base import ManaSourceAnalyzer
+
+    cards = [
+        {"types": ["Creature"], "oracle_text": "{T}: Add {G}."},
+        {"types": ["Sorcery"], "oracle_text": "Search your library for a basic land "
+         "card and put it onto the battlefield tapped."},
+        {"types": ["Creature"], "oracle_text": "Create a Heartwood token.",
+         "produced_tokens": [{"name": "Heartwood", "oracle_text": "{T}: Add {R} or {G}."}]},
+        {"types": ["Instant"], "oracle_text": "Add {C}{C}{C}."},
+        {"types": ["Creature"], "tags": ["fixing_ramp"]},
+        {"types": ["Artifact"], "oracle_text": "{T}, Sacrifice this artifact: "
+         "Add one mana of any color."},
+        {"types": ["Land"], "oracle_text": "{T}: Add {G}."},
+    ]
+    assert ManaSourceAnalyzer(cards).persistent_ramp_count == 3
+
+
+def test_artifact_token_replacement_suppresses_future_mana_only():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    producer = {"types": ["Creature"], "oracle_text": "Create a Heartwood token.",
+                "produced_tokens": [{"name": "Heartwood", "types": ["Artifact"],
+                                     "oracle_text": "{T}: Add {R} or {G}."}]}
+    treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token."}
+    visitor = {"types": ["Creature"], "oracle_text":
+               "If one or more artifact tokens would be created under your control, "
+               "that many 5/5 red Dragon creature tokens with flying are created instead."}
+    assert count_fixing([producer])["G"] == 1
+    replaced = ManaSourceAnalyzer([producer, treasure, visitor])
+    assert replaced.suppresses_artifact_token_mana
+    assert replaced.persistent_ramp_count == 0
+    assert count_fixing([producer, treasure, visitor]) == dict.fromkeys("WUBRG", 0)
+    existing_token = {"name": "Heartwood", "types": ["Artifact"],
+                      "oracle_text": "{T}: Add {R} or {G}."}
+    direct_dork = {"types": ["Creature"], "oracle_text": "{T}: Add {G}."}
+    assert count_fixing([existing_token, direct_dork, visitor]) == {
+        "W": 0, "U": 0, "B": 0, "R": 1, "G": 2,
+    }
+
+
+@pytest.mark.parametrize("rules, tokens", [
+    ("Deathtouch\nWhen Vraska enters, if you control six or more lands, destroy "
+     "target permanent an opponent controls. They create a Treasure token.", []),
+    ("Target opponent may create a Treasure token.", [
+        {"name": "Treasure", "types": ["Artifact"], "oracle_text":
+         "{T}, Sacrifice this token: Add one mana of any color."},
+    ]),
+    ("{T}: Add one mana of any color. Spend this mana only to cast a planeswalker spell.", []),
+    ("{T}: Add {C}. This mana can't be spent to cast spells from your hand.", []),
+    ("{T}: Add {U}. This mana can only be spent to activate abilities.", []),
+    ("Create a Treasure token.", [
+        {"name": "Treasure", "types": ["Artifact"], "oracle_text":
+         "{T}, Sacrifice this token: Add one mana of any color. "
+         "Spend this mana only to cast a planeswalker spell."},
+    ]),
+    ("Create a Heartwood token.", [
+        {"name": "Heartwood", "types": ["Artifact"], "oracle_text":
+         "{T}: Add {R} or {G}. This mana can be spent only to activate abilities."},
+    ]),
+])
+def test_foreign_and_restricted_mana_cannot_support_general_spells(rules, tokens):
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    card = {"name": "Restricted source", "types": ["Creature"],
+            "tags": ["fixing_ramp"], "oracle_text": rules, "produced_tokens": tokens}
+    analyzer = ManaSourceAnalyzer([card])
+    assert count_fixing([card]) == dict.fromkeys("WUBRG", 0)
+    assert analyzer.any_color_sources == 0
+    assert analyzer.total_fixing_cards == 0
+    assert analyzer.persistent_ramp_count == 0
+
+
+@pytest.mark.parametrize("own_kind, other_kind, expected", [
+    ("Clue", "Treasure", 0),
+    ("Treasure", "Clue", 1),
+])
+def test_mixed_ability_uses_only_our_tokens_in_old_overlay(own_kind, other_kind, expected):
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    card = {"types": ["Creature"], "oracle_text":
+            f"Create a {own_kind} token. They create a {other_kind} token.",
+            "produced_tokens": [
+                {"name": "Clue", "types": ["Artifact"], "oracle_text": "{2}, Sacrifice: Draw a card."},
+                {"name": "Treasure", "types": ["Artifact"], "oracle_text":
+                 "{T}, Sacrifice this token: Add one mana of any color."},
+            ]}
+    assert count_fixing([card]) == dict.fromkeys("WUBRG", expected)
+    assert ManaSourceAnalyzer([card]).persistent_ramp_count == 0
+
+
+def test_plain_own_treasure_and_colorless_permanent_ramp_still_work():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token.",
+                "produced_tokens": [{"name": "Treasure", "types": ["Artifact"],
+                                     "oracle_text": "{T}, Sacrifice this token: Add one mana of any color."}]}
+    assert count_fixing([treasure]) == dict.fromkeys("WUBRG", 1)
+    assert ManaSourceAnalyzer([treasure]).persistent_ramp_count == 0
+    colorless = {"types": ["Creature"], "oracle_text": "{T}: Add {C}."}
+    assert count_fixing([colorless]) == dict.fromkeys("WUBRG", 0)
+    assert ManaSourceAnalyzer([colorless]).persistent_ramp_count == 1
+
+
+def test_legacy_replacement_text_suppresses_future_artifact_mana():
+    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+
+    visitor = {"types": ["Creature"], "oracle_text":
+               "If you would create artifact tokens, create Dragon tokens instead."}
+    treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token."}
+    assert ManaSourceAnalyzer([visitor, treasure]).suppresses_artifact_token_mana
+    assert count_fixing([visitor, treasure]) == dict.fromkeys("WUBRG", 0)

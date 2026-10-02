@@ -4,6 +4,17 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.24 revises Advisor/Value to blend sample-aware archetype data once,
+use the strongest playable main-deck candidates for curve and role needs, and
+avoid rebuilding many decks for every Pack 3 recommendation. Draft progress
+uses the observed booster size. Local Arena metadata separates the main card
+from its prepared spell and provides evidence for hybrid costs and mana sources.
+Lands are evaluated against the current colors and planned splashes. General
+mana support excludes opponent-created tokens and explicitly restricted mana;
+the deck simulator uses the same verified sources, including nonbasic lands.
+Cards without published statistics retain a zero Advisor score. Value and mana
+fit are heuristics; wheel estimates are shown separately and do not reduce Value.
+
 Version 4.23 replaces manual datasets when the same set, format, player group,
 and time period are downloaded again. Existing duplicate snapshots resolve to
 the newest data, and failed exports preserve the previous usable dataset.
@@ -105,7 +116,7 @@ macOS actively quarantines unsigned apps downloaded from the internet. To run th
 
 ## Marquee Features
 
-- **Compositional Brain (v5.5):** A custom tactical engine that calculates a 0-100 `VALUE` score for cards in your pack. It dynamically weights raw Z-Score power, color lane commitment, curve needs, and relative wheel probability to suggest optimal picks. Look for the ⭐ symbol for elite "Bomb" picks.
+- **Draft Advisor:** Ranks cards using observed card quality, sample-aware archetype data, color access, and the curve and roles of playable main-deck candidates. `VALUE` is a heuristic index. Wheel estimates are separate hints. Look for the ⭐ symbol for strong observed quality with a sufficient sample and color fit.
 - **AI Monte Carlo Auto-Optimizer:** Click the "Auto-Optimize Deck" button to unleash a background simulation engine that mathematically tests different deck permutations (16 lands vs 17 lands, swapping out clunky 5-drops for efficient 2-drops) across 10,000 simulated games to find the perfect 40-card configuration.
 - **Sealed Studio:** A fully interactive drag-and-drop workspace specifically tailored for Sealed deckbuilding. Features an AI Shell Generator that automatically builds the top 3 mathematically optimal deck variants for your specific pool (e.g., Best 2-Color, Greedy Splash, Aggro).
 - **Automated Cloud Datasets:** The application uses a custom Cloud ETL Pipeline that compiles and distributes the latest 17Lands telemetry every day. When you open the app, it instantly syncs the data for active Arena events in the background so you never have to manually scrape data again. You can view the live dataset schedule [here](https://unrealities.github.io/MTGA_Draft_17Lands/).

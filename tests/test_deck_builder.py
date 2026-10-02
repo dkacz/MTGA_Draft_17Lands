@@ -356,3 +356,22 @@ def test_greedy_skips_unsupported_pair_instead_of_over_splashing(mock_metrics):
     deck, splash_col = build_variant_greedy(pool, ["B", "G"], mock_metrics)
 
     assert deck is None
+
+
+def test_greedy_double_pip_splash_needs_three_distinct_sources(mock_metrics):
+    from src.advisor.deck_builder import build_variant_greedy
+
+    pool = _greedy_pool(main_g=12, main_b=11, splash_u=0)
+    pool += [
+        {"name": "UU Bomb", "types": ["Creature"], "colors": ["U"],
+         "mana_cost": "{4}{U}{U}", "cmc": 6,
+         "deck_colors": {"All Decks": {"gihwr": 68.0}}},
+        {"name": "BU Dual", "types": ["Land"], "colors": ["B", "U"]},
+    ]
+    # The original GU dual plus BU dual are two sources, not four.
+    assert build_variant_greedy(pool, ["B", "G"], mock_metrics) == (None, "")
+    pool.append({"name": "Any land", "types": ["Land"],
+                 "oracle_text": "{T}: Add one mana of any color."})
+    deck, splash = build_variant_greedy(pool, ["B", "G"], mock_metrics)
+    assert deck is not None
+    assert splash == "U"

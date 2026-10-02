@@ -14,6 +14,7 @@ from typing import Dict
 from src import constants
 from src.configuration import write_configuration
 from src.advisor.engine import DraftAdvisor
+from src.advisor.progress import draft_progress
 from src.signals import SignalCalculator
 from src.card_logic import filter_options, get_deck_metrics
 from src.app_update import AppUpdate
@@ -208,22 +209,33 @@ class AppController:
             draft_id = self.orchestrator.scanner.current_draft_id
             start_time = self.orchestrator.scanner.draft_start_time
             event_string = self.orchestrator.scanner.event_string
+            cards_per_pick = self.orchestrator.scanner.cards_per_pick
         finally:
             self.orchestrator.scanner.lock.release()
 
         # ADVISOR & SIGNAL MATH
         sig_calc = SignalCalculator(metrics)
         scores = {c: 0.0 for c in constants.CARD_COLORS}
+        picks_completed, total_picks = draft_progress(history, pk, pi, cards_per_pick, len(taken_cards))
+        seen_packs = set()
         for entry in history:
-            if entry["Pack"] == 2:
+            key = (entry["Pack"], entry["Pick"])
+            if entry["Pack"] == 2 or key in seen_packs:
                 continue
+            seen_packs.add(key)
+            entry_completed, _ = draft_progress(history, *key, cards_per_pick)
+            age = max(0, picks_completed - entry_completed)
+            decay = 0.9 ** age
             h_pack = self.orchestrator.scanner.set_data.get_data_by_id(entry["Cards"])
             for c, v in sig_calc.calculate_pack_signals(h_pack, entry["Pick"]).items():
-                scores[c] += v
+                scores[c] += v * decay
 
         # Pass signals securely into Advisor
         advisor = DraftAdvisor(metrics, taken_cards, signals=scores)
-        recommendations = advisor.evaluate_pack(pack_cards, pi, current_pack=pk)
+        recommendations = advisor.evaluate_pack(
+            pack_cards, pi, current_pack=pk,
+            picks_completed=picks_completed, total_picks=total_picks,
+        )
 
         # UPDATE UI STATE
         if pk > 0:

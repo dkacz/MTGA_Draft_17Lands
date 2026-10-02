@@ -53,7 +53,10 @@ def test_parsing_bitmasks_and_flags():
             "Unknown Shores", count=1, types=["Land"], text="add one mana of any color"
         ),
         # 4. Ramp Artifact (Any Color)
-        make_card("Manalith", count=1, types=["Artifact"], tags=["fixing_ramp"]),
+        make_card(
+            "Manalith", count=1, types=["Artifact"],
+            text="{T}: Add one mana of any color.", tags=["fixing_ramp"],
+        ),
         # 5. Removal Spell
         make_card(
             "Murder",
@@ -92,6 +95,140 @@ def test_parsing_bitmasks_and_flags():
     assert primary_req[4] == 4
     # Hybrid Spell picks the first valid pip from '{U/R}' which is 'U' (2)
     assert primary_req[5] == 2
+
+
+def parse_cards(cards):
+    count = sum(card.get("count", 1) for card in cards)
+    return _parse_deck_to_arrays(
+        [*cards, make_card("Filler", count=40 - count, types=["Creature"])]
+    )
+
+
+@pytest.mark.parametrize("name, text, expected_mask", [
+    ("Roiling Canopy", "This land enters tapped.\n"
+     "Whenever a Forest you control enters, if you control at least five other Forests, "
+     "target creature you control gets +3/+3 until end of turn.\n{T}: Add {G}.", 16),
+    ("Konstrari Annex", "This land enters tapped unless you control a planeswalker.\n"
+     "{T}: Add {R} or {G}.", 24),
+    ("Transformative Commons", "This land enters tapped unless you control a planeswalker.\n"
+     "{T}: Add {G} or {U}.", 18),
+    ("Theorist's Sanctum", "As this land enters, you may behold a Jace. If you don't, "
+     "this land enters tapped.\n{2}{U}, {T}: Empower Jace 2.\n{T}: Add {U}.", 2),
+])
+def test_enriched_fra_lands_use_verified_production(name, text, expected_mask):
+    # Primary rules copied from the applied Arena metadata; lands are colorless.
+    card = make_card(name, types=["Land"], text=text, tags=["fixing_ramp"])
+    card["main_face"] = dict(card)
+    arrays = parse_cards([card])
+    assert arrays[0][0]
+    assert not arrays[1][0]
+    assert arrays[4][0] == expected_mask
+    assert arrays[5][0] == 0
+
+
+@pytest.mark.parametrize("name, expected_mask", [
+    ("Plains", 1), ("Island", 2), ("Swamp", 4), ("Mountain", 8), ("Forest", 16),
+    ("Snow-Covered Plains", 1), ("Snow-Covered Island", 2),
+    ("Snow-Covered Swamp", 4), ("Snow-Covered Mountain", 8),
+    ("Snow-Covered Forest", 16), ("Wastes", 0),
+])
+def test_colorless_basic_metadata_still_supplies_basic_mana(name, expected_mask):
+    arrays = parse_cards([make_card(name, types=["Land", "Basic"])])
+    assert arrays[0][0]
+    assert not arrays[1][0]
+    assert arrays[4][0] == expected_mask
+
+
+@pytest.mark.parametrize("text, expected_mask, expected_ramp", [
+    ("", 0, False),
+    ("{T}: Add {G}.", 16, True),
+    ("{T}: Add {C}.", 0, True),
+    ("Add {C}{C}{C}.", 0, False),
+    ("{T}: Add one mana of any color.", 31, True),
+    ("Create a Treasure token.", 31, True),
+    ("Target opponent creates a Treasure token.", 0, False),
+    ("When this creature enters, destroy target permanent an opponent controls. "
+     "They create a Treasure token.", 0, False),
+    ("{T}: Add one mana of any color. Spend this mana only to cast a planeswalker spell.",
+     0, False),
+    ("{T}: Add {C}. This mana can't be spent to cast spells from your hand.", 0, False),
+])
+def test_source_masks_and_ramp_flags_require_legal_evidence(text, expected_mask, expected_ramp):
+    card = make_card("Source", types=["Artifact"], colors=["G"], text=text,
+                     tags=["fixing_ramp"])
+    card["produced_tokens"] = [{
+        "name": "Treasure", "types": ["Artifact"],
+        "oracle_text": "{T}, Sacrifice this artifact: Add one mana of any color.",
+    }]
+    arrays = parse_cards([card])
+    assert not arrays[0][0]
+    assert bool(arrays[1][0]) is expected_ramp
+    assert arrays[4][0] == expected_mask
+
+
+@pytest.mark.parametrize("include_visitor", [False, True])
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_visitor_context_suppresses_future_tokens_only(include_visitor, reverse_order):
+    producer = make_card("Heartwood Maker", types=["Creature"],
+                         text="When this creature enters, create a Heartwood token.")
+    producer["produced_tokens"] = [{
+        "name": "Heartwood", "types": ["Artifact"],
+        "oracle_text": "{T}: Add {R} or {G}.",
+    }]
+    cards = [
+        producer,
+        make_card("Treasure Maker", types=["Creature"], text="Create a Treasure token."),
+        make_card("Green Dork", types=["Creature"], text="{T}: Add {G}."),
+        make_card("Existing Heartwood", types=["Artifact"], text="{T}: Add {R} or {G}."),
+    ]
+    expected = {"Heartwood Maker": 24, "Treasure Maker": 31,
+                "Green Dork": 16, "Existing Heartwood": 24}
+    if include_visitor:
+        cards.append(make_card(
+            "Draconic Visitor", types=["Creature"],
+            text="If one or more artifact tokens would be created under your control, "
+            "that many 5/5 red Dragon creature tokens with flying are created instead.",
+        ))
+        expected.update({"Heartwood Maker": 0, "Treasure Maker": 0, "Draconic Visitor": 0})
+    if reverse_order:
+        cards.reverse()
+
+    arrays = parse_cards(cards)
+    for i, card in enumerate(cards):
+        mask = expected[card["name"]]
+        assert arrays[4][i] == mask
+        assert bool(arrays[1][i]) is (mask > 0)
+
+
+def test_primary_face_supplies_types_cost_cmc_and_mana_rules():
+    card = make_card(
+        "Prepared Creature", cmc=1, types=["Land", "Creature", "Sorcery"],
+        mana_cost="{U}", colors=["U"], text="{T}: Add one mana of any color.",
+        tags=["fixing_ramp"],
+    )
+    card["main_face"] = {
+        "name": "Prepared Creature", "types": ["Creature"], "colors": ["R"],
+        "mana_cost": "{2}{R}", "cmc": 3, "oracle_text": "This creature enters prepared.",
+    }
+    card["prepared_spell"] = {
+        "types": ["Sorcery"], "mana_cost": "{U}", "cmc": 1,
+        "oracle_text": "Create a Treasure token.",
+    }
+    arrays = parse_cards([card])
+    assert not arrays[0][0]
+    assert not arrays[1][0]
+    assert arrays[3][0] == 3
+    assert arrays[4][0] == 0
+    assert arrays[5][0] == 8
+
+
+def test_flattened_sources_use_unit_counts_without_mutating_input():
+    dork = make_card("Green Dork", count="2", types=["Creature"], text="{T}: Add {G}.")
+    deck = [dork, make_card("Mountain", count=38, types=["Land"])]
+    arrays = _parse_deck_to_arrays(deck)
+    assert arrays[4].tolist() == [16, 16] + [8] * 38
+    assert arrays[1].tolist() == [True, True] + [False] * 38
+    assert dork["count"] == "2"
 
 
 def test_mulligan_0_lands():

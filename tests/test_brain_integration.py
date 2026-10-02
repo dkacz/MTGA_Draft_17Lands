@@ -1,7 +1,7 @@
 """
 tests/test_brain_integration.py
-Integration test for the Pro Tour Edition Advisor.
-Verifies Karsten Math, Wheel Greed, and Weighted Scoring.
+Integration tests for draft recommendations displayed in the application.
+Verify color discipline, documented fixing, and display-only wheel estimates.
 """
 
 import pytest
@@ -64,6 +64,7 @@ def create_mock_dataset(path):
                 "types": ["Land"],
                 "colors": ["B", "G"],
                 "mana_cost": "",
+                "oracle_text": "{T}: Add {B} or {G}.",
                 "deck_colors": {"All Decks": {"gihwr": 52.0, "alsa": 5.0}},
             },
             # Filler cards to prevent VOR scarcity bonus from ruining test math
@@ -154,11 +155,14 @@ class TestBrainIntegration:
 
         # 1. Establish Green Lane with a Black splash option
         # 3 Green Hulks + 1 BG Dual Land
-        app.orchestrator.scanner.taken_cards = ["101", "101", "101", "105"]
+        scanner = app.orchestrator.scanner
+        scanner.current_draft_id = "1"
+        scanner.current_pack, scanner.current_pick = 2, 4
+        scanner.taken_cards = ["101", "101", "101", "105"]
 
-        # 2. Simulate Late Pack 2 (Pick 20)
+        # 2. Continue the same draft at Pack 2 Pick 5.
         p2p5 = (
-            '[UnityCrossThreadLogger]Draft.Notify {"draftId":"1","SelfPick":20,"SelfPack":2,'
+            '[UnityCrossThreadLogger]Draft.Notify {"draftId":"1","SelfPick":5,"SelfPack":2,'
             '"PackCards":"101,102,103,104"}\n'
         )
         with open(log, "a") as f:
@@ -185,7 +189,7 @@ class TestBrainIntegration:
 
         # --- VERIFICATION 1: Double Pip Penalty ---
         # "Red Bomb Double Pip" has 68% GIHWR (Highest in pack).
-        # But we are Green/Black, and it costs {2}{R}{R}.
+        # But the lane is Green with Black fixing, and it costs {2}{R}{R}.
         # Score should be strictly penalized by the Pack 2 Discipline logic.
         assert "Red Bomb Double Pip" in scores
         assert scores["Red Bomb Double Pip"] < 20.0
@@ -193,11 +197,11 @@ class TestBrainIntegration:
         # --- VERIFICATION 2: Single Pip Splash ---
         # "Black Removal Single Pip" is {1}{B}. 58% WR.
         # Because we drafted a Golgari Guildgate, the engine recognizes we have fixing
-        # It bypasses the uncastable penalty and scores ~39.0.
+        # Documented Black fixing makes it preferable to unsupported Red.
         assert "Black Removal Single Pip" in scores
         assert scores["Black Removal Single Pip"] > scores["Red Bomb Double Pip"]
 
-    def test_wheel_greed_logic(self, env):
+    def test_wheel_estimate_does_not_reduce_value(self, env):
         app, log, root = env["app"], env["log"], env["root"]
 
         # Pick 2.
@@ -223,8 +227,17 @@ class TestBrainIntegration:
                 score = float(vals[1])
                 scores[name] = score
 
-        # "Wheeling Dork" (104) has ALSA 13.0.
-        # At Pick 2, it is extremely likely to wheel.
-        # Engine should suppress its score relative to its raw power.
+        # Changing ALSA changes the wheel hint, not the card's Value.
         assert "Wheeling Dork" in scores
-        assert scores["Wheeling Dork"] < 50.0
+        rec = next(r for r in app.dashboard.advisor_panel.last_recs
+                   if r.card_name == "Wheeling Dork")
+        assert rec.wheel_chance > 0
+        scanner = app.orchestrator.scanner
+        scanner.set_data.get_card_ratings()["104"]["deck_colors"]["All Decks"]["alsa"] = 0
+        app._refresh_ui_data()
+        for _ in range(5):
+            root.update()
+        updated = next(r for r in app.dashboard.advisor_panel.last_recs
+                       if r.card_name == "Wheeling Dork")
+        assert updated.wheel_chance == 0
+        assert updated.contextual_score == rec.contextual_score

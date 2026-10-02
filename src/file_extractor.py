@@ -10,8 +10,13 @@ import glob
 import re
 import sqlite3
 import tempfile
+import copy
+import html
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict
 from src import constants
+from src.advisor.card_features import get_own_token_creation_text
 from src.logger import create_logger
 from src.utils import Result, check_file_integrity, clean_string
 from src.ui_progress import UIProgress
@@ -73,6 +78,249 @@ def decode_mana_cost(encoded_cost):
         decoded_cost = "".join(f"{{{x}}}" for x in sections)
 
     return decoded_cost, cmc
+
+
+def _normalize_arena_text(text):
+    """Translate Arena's inline mana notation and formatting into plain text."""
+    text = html.unescape(str(text or "")).replace("\\n", "\n")
+    text = re.sub(r"<[^>]*>", "", text)
+    return re.sub(
+        r"\{(o[^}]+)\}", lambda match: decode_mana_cost(match[1])[0], text
+    )
+
+
+def _arena_metadata(rows, card_text, card_enumerators):
+    """Build primary and optional-face metadata without merging their traits."""
+    rows = {int(row["grpid"]): row for row in rows}
+    enums = {
+        key: {str(k): v for k, v in values.items()}
+        for key, values in card_enumerators.items()
+    }
+
+    def mapped(value, kind):
+        values = enums.get(kind, {})
+        return [card_text[values[x]] for x in str(value or "").split(",")
+                if x in values and values[x] in card_text]
+
+    def colors(value):
+        mapped_colors = mapped(value, "colors")
+        return [c for c in constants.CARD_COLORS
+                if c in [constants.CARD_COLORS_DICT.get(x) for x in mapped_colors]]
+
+    def face(row):
+        mana_cost, cmc = decode_mana_cost(row.get("oldschoolmanatext"))
+        ability_texts = [
+            card_text[int(loc_id)]
+            for loc_id in re.findall(r"\d+:(\d+)", row.get("abilityids") or "")
+            if int(loc_id) in card_text
+        ]
+        return {
+            "arena_id": int(row["grpid"]),
+            "name": card_text.get(row.get("titleid"), ""),
+            "mana_cost": mana_cost,
+            "cmc": cmc,
+            "types": list(dict.fromkeys(mapped(row.get("types"), "types")
+                                         + mapped(row.get("supertypes"), "supertypes"))),
+            "subtypes": mapped(row.get("subtypes"), "subtypes"),
+            "colors": colors(row.get("colors", row.get("coloridentity"))),
+            "color_identity": colors(row.get("coloridentity")),
+            "oracle_text": "\n".join(_normalize_arena_text(t) for t in ability_texts),
+            "linked_face_type": row.get("linkedfacetype", 0),
+        }
+
+    metadata = {}
+    for gid, row in rows.items():
+        primary = face(row)
+        linked = [
+            face(rows[int(linked_id)])
+            for linked_id in str(row.get("linkedfacegrpids") or "").split(",")
+            if linked_id.isdigit() and int(linked_id) in rows
+        ]
+        # Token rule text supplies production evidence, e.g. Heartwood's R/G.
+        # A reference alone is insufficient: this particular ability must create
+        # our token, rather than giving an opponent a token or replacing creation.
+        if get_own_token_creation_text(primary):
+            ability_texts = {
+                ability_id: _normalize_arena_text(card_text[int(loc_id)])
+                for ability_id, loc_id in re.findall(
+                    r"(\d+):(\d+)", row.get("abilityids") or ""
+                ) if int(loc_id) in card_text
+            }
+            token_ids = dict.fromkeys(
+                int(token_id) for ability_id, token_id in re.findall(
+                    r"(\d+):(\d+)", row.get("abilityidtolinkedtokengrpid") or ""
+                ) if get_own_token_creation_text(ability_texts.get(ability_id, ""))
+                and int(token_id) in rows
+                and card_text.get(rows[int(token_id)].get("titleid"))
+                and card_text.get(rows[int(token_id)].get("titleid"), "").lower()
+                in get_own_token_creation_text(ability_texts.get(ability_id, "")).lower()
+            )
+            produced_tokens = [face(rows[x]) for x in token_ids
+                               if x in rows and rows[x].get("istoken")]
+            if produced_tokens:
+                primary["produced_tokens"] = produced_tokens
+        data = dict(primary, main_face=primary, metadata_source="arena_local",
+                    isprimarycard=row.get("isprimarycard", 1),
+                    arena_set=row.get("expansioncode", ""))
+        if linked:
+            data["linked_faces"] = linked
+        if row.get("linkedfacetype") == 19:
+            prepared = next((f for f in linked if f["linked_face_type"] == 20), None)
+            if prepared:
+                data["prepared_spell"] = prepared
+        metadata[gid] = data
+    return metadata
+
+
+@lru_cache(maxsize=8)
+def _read_local_card_metadata(file_path, mtime_ns, file_size, card_ids):
+    """The stat arguments invalidate the in-memory cache after an Arena update."""
+    connection = sqlite3.connect(Path(file_path).as_uri() + "?mode=ro", uri=True,
+                                 timeout=5.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        columns = {row["name"].lower()
+                   for row in connection.execute("PRAGMA table_info(Cards)")}
+        if not {"grpid", "titleid", "types", "oldschoolmanatext"} <= columns:
+            return {}
+
+        def fetch(ids):
+            fetched = []
+            for start in range(0, len(ids), 400):
+                batch = ids[start:start + 400]
+                placeholders = ",".join("?" for _ in batch)
+                fetched.extend(
+                    {k.lower(): v for k, v in dict(row).items()}
+                    for row in connection.execute(
+                        f"SELECT * FROM Cards WHERE GrpId IN ({placeholders})", batch
+                    )
+                )
+            return fetched
+
+        rows = fetch(card_ids)
+        related_ids = {
+            int(x) for row in rows
+            for x in str(row.get("linkedfacegrpids") or "").split(",")
+            if x.isdigit()
+        }
+        related_ids.update(
+            int(x) for row in rows for x in re.findall(
+                r"\d+:(\d+)", row.get("abilityidtolinkedtokengrpid") or ""
+            )
+        )
+        related_ids.difference_update(row["grpid"] for row in rows)
+        if related_ids:
+            rows.extend(fetch(tuple(sorted(related_ids))))
+        enum_rows = list(connection.execute(
+            "SELECT LocId, Type, Value FROM Enums "
+            "WHERE Type IN ('Color', 'CardType', 'SubType', 'SuperType')"
+        ))
+        kinds = {"color": "colors", "cardtype": "types", "subtype": "subtypes",
+                 "supertype": "supertypes"}
+        enums = {kind: {} for kind in kinds.values()}
+        for row in enum_rows:
+            enums[kinds[row["Type"].lower()]][row["Value"]] = row["LocId"]
+        loc_ids = {row["titleid"] for row in rows}
+        loc_ids.update(int(x) for row in rows for x in re.findall(
+            r"\d+:(\d+)", row.get("abilityids") or ""
+        ))
+        loc_ids.update(row["LocId"] for row in enum_rows)
+        text = {}
+        loc_ids = tuple(sorted(x for x in loc_ids if x is not None))
+        for start in range(0, len(loc_ids), 400):
+            batch = loc_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            # Some entries exist only as Formatted=1. Prefer the least formatted
+            # available variant rather than filtering out those entries.
+            for row in connection.execute(
+                f"SELECT LocId, Loc FROM Localizations_enUS "
+                f"WHERE LocId IN ({placeholders}) ORDER BY LocId, Formatted", batch
+            ):
+                if row["Loc"]:
+                    text.setdefault(row["LocId"], row["Loc"])
+        metadata = _arena_metadata(rows, text, enums)
+        return {
+            str(gid): data for gid, data in metadata.items()
+            if gid in card_ids and data["name"] and data["types"]
+        }
+    finally:
+        connection.close()
+
+
+_LOCAL_ARENA_METADATA_DIRECTORY_CACHE = {}
+
+
+def discover_local_arena_metadata_directory():
+    """Find only the existing platform-defined Arena roots; never save settings."""
+    if sys.platform == constants.PLATFORM_ID_OSX:
+        roots = [Path.home() / constants.LOCAL_DATA_FOLDER_PATH_OSX,
+                 Path.home() / constants.LOCAL_DATA_FOLDER_PATH_OSX_STEAM]
+    elif sys.platform == constants.PLATFORM_ID_LINUX:
+        roots = [Path(constants.LOCAL_DATA_FOLDER_PATH_LINUX)] \
+            if constants.LOCAL_DATA_FOLDER_PATH_LINUX else []
+    else:
+        roots = [
+            Path(drive) / program_files / installation
+            for drive, program_files, installation in itertools.product(
+                constants.WINDOWS_DRIVES, constants.WINDOWS_PROGRAM_FILES,
+                (constants.LOCAL_DATA_FOLDER_PATH_WINDOWS,
+                 constants.LOCAL_DATA_FOLDER_PATH_WINDOWS_STEAM),
+            )
+        ]
+    key = tuple(str(root) for root in roots)
+    if key in _LOCAL_ARENA_METADATA_DIRECTORY_CACHE:
+        return _LOCAL_ARENA_METADATA_DIRECTORY_CACHE[key]
+    for root in roots:
+        try:
+            raw = root / constants.LOCAL_DOWNLOADS_DATA
+            if raw.is_dir() and any(
+                path.is_file()
+                for path in raw.glob(constants.LOCAL_DATA_FILE_PREFIX_DATABASE + "*")
+            ):
+                _LOCAL_ARENA_METADATA_DIRECTORY_CACHE[key] = str(root)
+                return str(root)
+        except OSError:
+            continue
+    # A failed lookup is not cached: Arena can be installed or updated later.
+    return None
+
+
+def load_local_card_metadata(arena_directory, card_ids):
+    """Read cached English face metadata from local Arena SQLite files only.
+
+No source files are changed. Missing/corrupt databases leave the supplied
+dataset intact, and this function is called during loading, never pack scoring.
+"""
+    arena_directory = arena_directory or discover_local_arena_metadata_directory()
+    if not arena_directory:
+        return {}
+    ids = tuple(sorted({int(x) for x in card_ids if str(x).isdigit()}))
+    if not ids:
+        return {}
+    try:
+        directory = Path(arena_directory).expanduser()
+        if directory.is_file():
+            files = [directory]
+        else:
+            directory = directory / constants.LOCAL_DOWNLOADS_DATA
+            if not directory.is_dir():
+                return {}
+            files = sorted(directory.glob(constants.LOCAL_DATA_FILE_PREFIX_DATABASE + "*"),
+                           key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    except OSError:
+        return {}
+    found = {}
+    for file_path in files:
+        remaining = tuple(x for x in ids if str(x) not in found)
+        if not remaining:
+            break
+        try:
+            stat = file_path.stat()
+            found.update(_read_local_card_metadata(str(file_path.resolve()),
+                         stat.st_mtime_ns, stat.st_size, remaining))
+        except (OSError, sqlite3.Error, KeyError, ValueError) as error:
+            logger.debug("Local card metadata unavailable for %s: %s", file_path, error)
+    return copy.deepcopy(found)
 
 
 def _linux_steam_libraries():
@@ -764,6 +1012,15 @@ class FileExtractor(UIProgress):
                 self._update_status("Retrieving Temporary Card Data")
                 result = self._retrieve_stored_data(self.selected_sets.arena)
 
+                if result:
+                    # Also refresh an older temp cache: downloads export primary
+                    # characteristics and rule text even when the DB size is unchanged.
+                    metadata = load_local_card_metadata(
+                        arena_database_locations[0], self.card_dict
+                    )
+                    for card_id, fields in metadata.items():
+                        self.card_dict[card_id].update(fields)
+
                 database_size = current_database_size
 
             except Exception as error:
@@ -974,10 +1231,13 @@ class FileExtractor(UIProgress):
         card_text = {}
         card_enumerators = {}
         card_data = {}
+        connection = None
         try:
             # Open Sqlite3 database
             while True:
-                connection = sqlite3.connect(file_location)
+                connection = sqlite3.connect(
+                    Path(file_location).resolve().as_uri() + "?mode=ro", uri=True
+                )
                 connection.row_factory = sqlite3.Row
                 cursor = connection.cursor()
 
@@ -1024,7 +1284,8 @@ class FileExtractor(UIProgress):
             logger.error(error)
 
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
         return result, card_text, card_enumerators, card_data
 

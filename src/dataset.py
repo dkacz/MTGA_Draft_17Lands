@@ -31,12 +31,56 @@ class Dataset:
     def __init__(self, retrieve_unknown: bool = False, db_path: str = None):
         self._dataset = None
         self._retrieve_unknown = retrieve_unknown
-        self.db_path = db_path
+        self._db_path = db_path
         self._name_index = {}
         self._id_index = {}
         self.unknown_id_cache = {}
         self._fallback_ratings = {}
         self._load_custom_cache()
+
+    @property
+    def db_path(self):
+        return self._db_path
+
+    @db_path.setter
+    def db_path(self, value):
+        self._db_path = value
+        # Arena may be associated after the ratings file has already loaded.
+        self.enrich_local_metadata()
+
+    def enrich_local_metadata(self):
+        """Update loaded card records in memory using local, read-only metadata."""
+        if not self._dataset:
+            return 0
+        from src.file_extractor import load_local_card_metadata
+
+        cards = self._dataset.get("card_ratings", {})
+        metadata = load_local_card_metadata(self.db_path, cards)
+        updated = 0
+        for card_id, fields in metadata.items():
+            card = cards[card_id]
+            # IDs in a custom dataset can collide with real Arena IDs. Require
+            # matching names and the same main/optional-face status first.
+            name = card.get(DATA_FIELD_NAME)
+            expected_name = sanitize_card_name(name or "").replace("///", "//").strip().casefold()
+            local_name = sanitize_card_name(fields.get("name") or "").replace("///", "//").strip().casefold()
+            if not expected_name or expected_name != local_name:
+                continue
+            if bool(card.get("isprimarycard", 1)) != bool(fields.get("isprimarycard", 1)):
+                continue
+            # Automatic discovery targets this correction's FRA/preparation
+            # scope; legacy modal/adventure policies in other sets stay local.
+            if not self.db_path and not (
+                str(fields.get("arena_set") or "").upper() == "FRA"
+                or str(card.get("linkedfacetype", "")) in ("19", "20")
+                or card.get("prepared_spell")
+            ):
+                continue
+            # Preserve each existing rating record and any references to it.
+            card.update(fields)
+            card[DATA_FIELD_NAME] = name
+            updated += 1
+        return updated
 
     def _load_custom_cache(self):
         import os
@@ -82,6 +126,7 @@ class Dataset:
 
         import sqlite3
         import os
+        from pathlib import Path
         from src import constants
 
         try:
@@ -113,8 +158,10 @@ class Dataset:
                     for db_filename in db_files:
                         db_file = os.path.join(db_folder, db_filename)
                         try:
-                            # Standard connect with timeout avoids Windows URI pathing bugs
-                            conn = sqlite3.connect(db_file, timeout=5.0)
+                            conn = sqlite3.connect(
+                                Path(db_file).resolve().as_uri() + "?mode=ro",
+                                uri=True, timeout=5.0,
+                            )
                             cursor = conn.cursor()
 
                             # Find all localization tables to support non-English clients and avoid empty deprecated tables
@@ -187,6 +234,7 @@ class Dataset:
                     self._id_index[card_name] = k
 
         self._dataset = json_data
+        self.enrich_local_metadata()
         return result
 
     def get_data_by_id(self, id_list: List[str]) -> List[Dict]:

@@ -6,6 +6,30 @@ Frank Karsten mathematically-optimized mana base generation and source analysis.
 import itertools
 import re
 from src import constants
+from src.advisor.card_features import (
+    get_color_requirements,
+    get_main_cmc,
+    get_main_colors,
+    get_main_face,
+    get_main_mana_cost,
+    get_main_text,
+    get_main_types,
+    get_mana_colors,
+    get_own_token_creation_text,
+    is_on_color,
+)
+
+
+def _has_mana_spending_restriction(text):
+    """Exclude obvious spend limits from general support, without modeling them."""
+    text = str(text or "").lower().replace("’", "'")
+    return bool(re.search(
+        r"\b(?:spend|use)\b[^.\n]*\bmana\b[^.\n]*\bonly\b"
+        r"|\bmana\b[^.\n]*\b(?:can't|cannot|may not|only)\b[^.\n]*\b(?:spent|spend|used|use|cast)\b"
+        r"|\bmana\b[^.\n]*\b(?:spent|used)\b[^.\n]*\bonly\b"
+        r"|\b(?:can't|cannot|may not)\b[^.\n]*\b(?:spend|use)\b[^.\n]*\bmana\b",
+        text,
+    ))
 
 
 def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17):
@@ -26,16 +50,12 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
     any_color_enabler_pips = analyzer.any_color_enabler_pips
 
     for card in spells:
-        cost, cmc = card.get("mana_cost", ""), int(card.get("cmc", 99) or 99)
+        cost = get_main_mana_cost(card)
+        cmc = int(get_main_cmc(card) or 99)
 
         if cost:
-            pips = re.findall(r"\{(.*?)\}", cost)
             card_color_pips = {c: 0 for c in constants.CARD_COLORS}
-            for pip in pips:
-                opts = pip.split("/")
-                if all(opt.isdigit() or opt in ["X", "C"] for opt in opts):
-                    continue
-
+            for opts in get_color_requirements(card):
                 valid_opts = [
                     opt
                     for opt in opts
@@ -57,7 +77,7 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
                     if cmc < lowest_cmc[c]:
                         lowest_cmc[c] = cmc
         else:
-            for c in card.get("colors", []):
+            for c in get_main_colors(card):
                 if c in colors:
                     strict_pips[c] += 1
                     max_pip_in_single_card[c] = max(1, max_pip_in_single_card[c])
@@ -202,30 +222,27 @@ def create_basic_lands(color, count):
 
 
 def is_castable(card, colors, strict=True):
-    card_colors, mana_cost = card.get("colors", []), card.get("mana_cost", "")
-    if not card_colors:
-        return True
     if strict:
-        if mana_cost:
-            for pip in re.findall(r"\{(.*?)\}", mana_cost):
-                options = pip.split("/")
-                if any(opt.isdigit() or opt in ["X", "C"] for opt in options):
-                    continue
-                valid_mana_options = [opt for opt in options if opt in "WUBRGP"]
-                if not valid_mana_options:
-                    continue
-                if not any(opt in colors or opt == "P" for opt in valid_mana_options):
-                    return False
-            return True
-        else:
-            return all(c in colors for c in card_colors)
-    else:
-        return any(c in colors for c in card_colors)
+        return is_on_color(card, colors)
+    card_colors = get_mana_colors(card)
+    return not card_colors or any(c in colors for c in card_colors)
 
 
 class ManaSourceAnalyzer:
-    def __init__(self, pool):
+    def __init__(self, pool, suppress_artifact_token_mana=None):
         self.pool = pool
+        # A deck-pool has no battlefield timing. Conservatively do not promise
+        # mana from future artifact tokens when the verified replacement turns
+        # them into Dragons; already-existing token records remain sources.
+        self.suppresses_artifact_token_mana = (
+            suppress_artifact_token_mana
+            if suppress_artifact_token_mana is not None
+            else any(re.search(
+                r"(?:artifact tokens would be created\b|you would create\b[^.]*\bartifact tokens\b)"
+                r"[^.]*\bdragon(?: creature)? tokens\b[^.]*\binstead\b",
+                get_main_text(card).lower(),
+            ) for card in pool)
+        )
         self.sources = {c: 0 for c in constants.CARD_COLORS}
         # Lands that produce any color are dependable sources; spells that fix
         # (Treasure makers, dorks) are transient and must be discounted by the
@@ -234,6 +251,9 @@ class ManaSourceAnalyzer:
         self.any_color_spell_sources = 0
         self.any_color_enabler_pips = {c: 0 for c in constants.CARD_COLORS}
         self.total_fixing_cards = 0
+        # Nonland cards with evidenced lasting mana acceleration. This is a
+        # card count, not an estimate of when or how much mana becomes available.
+        self.persistent_ramp_count = 0
         for card in self.pool:
             self._evaluate(card)
 
@@ -242,16 +262,24 @@ class ManaSourceAnalyzer:
         return self.any_color_land_sources + self.any_color_spell_sources
 
     def _evaluate(self, card):
-        count, types, tags = (
-            card.get("count", 1),
-            card.get("types", []),
-            card.get("tags", []),
+        count, types = card.get("count", 1), get_main_types(card)
+        text, name = get_main_text(card).lower(), card.get("name", "").lower()
+        card_colors, is_land = get_main_colors(card), "Land" in types
+        if is_land and ("Basic" in types or card.get("name") in constants.BASIC_LANDS):
+            return
+        # Specialized casting/activation uses need their own model. They cannot
+        # fund arbitrary spells from hand or reduce general mana pressure.
+        if _has_mana_spending_restriction(text):
+            return
+
+        # Do not let a foreign token's quoted mana ability, creation phrase, or
+        # stale linked metadata become our mana. Preserve independent abilities.
+        text = "\n".join(
+            line for line in re.split(r"(?<=\.)|\n", text)
+            if not (re.search(r"\bcreate\b", line)
+                    and re.search(r"\b(?:tokens?|treasure|gold|heartwood)\b", line)
+                    and not get_own_token_creation_text(line))
         )
-        text, name = (
-            str(card.get("oracle_text", card.get("text", ""))).lower(),
-            card.get("name", "").lower(),
-        )
-        card_colors, is_land = card.get("colors", []), "Land" in types
 
         specific_fixing_map = {
             "plainscycling": "W",
@@ -266,57 +294,118 @@ class ManaSourceAnalyzer:
             "search your library for a forest": "G",
         }
 
-        specific_match_found = False
+        specific_colors = set()
         for phrase, color_sym in specific_fixing_map.items():
             if phrase in text:
-                self.sources[color_sym] += count
-                self.total_fixing_cards += count
-                specific_match_found = True
+                specific_colors.add(color_sym)
 
+        # These fetches find a restricted choice of basic land types.
+        restricted_fetches = {
+            "riveteers overlook": "BRG", "brokers hideout": "WUG",
+            "cabaretti courtyard": "WRG", "maestros theater": "UBR",
+            "obscura storefront": "WUB",
+        }
+        for fetch_name, fetched_colors in restricted_fetches.items():
+            if fetch_name in name:
+                specific_colors.update(fetched_colors)
+
+        own_creation_text = get_own_token_creation_text(text).lower()
+        produced_tokens = (get_main_face(card).get("produced_tokens", [])
+                           if own_creation_text else [])
+        restricted_tokens = [token for token in produced_tokens
+                             if _has_mana_spending_restriction(get_main_text(token))]
+        if restricted_tokens:
+            blocked_names = [str(token.get("name") or "").lower()
+                             for token in restricted_tokens]
+            # Explicit token restrictions override a generic Treasure/Heartwood
+            # fallback in the maker's text, including older enriched records.
+            text = "\n".join(
+                line for line in re.split(r"(?<=\.)|\n", text)
+                if not (get_own_token_creation_text(line)
+                        and any(not name or name in line for name in blocked_names))
+            )
+            produced_tokens = [token for token in produced_tokens
+                               if token not in restricted_tokens]
+        # Older overlays can contain both our and another player's linked
+        # tokens. Their names must be present in the surviving own creation.
+        own_creation_text = get_own_token_creation_text(text).lower()
+        produced_tokens = [
+            token for token in produced_tokens
+            if token.get("name")
+            and str(token["name"]).lower() in own_creation_text
+        ]
+        artifact_token_names = [
+            str(token.get("name") or "").lower() for token in produced_tokens
+            if "Artifact" in get_main_types(token)
+        ]
+        if self.suppresses_artifact_token_mana:
+            text = "\n".join(
+                line for line in re.split(r"(?<=\.)|\n", text)
+                if not (re.search(r"\bcreate\b", line) and (
+                    re.search(r"\b(?:heartwood|treasure|gold|artifact(?: creature)?) tokens?", line)
+                    or any(name and name in line for name in artifact_token_names)
+                ))
+            )
+        evidence = [text]
+        if get_own_token_creation_text(text):
+            evidence.extend(
+                get_main_text(token).lower() for token in produced_tokens
+                if not (self.suppresses_artifact_token_mana
+                        and "Artifact" in get_main_types(token))
+            )
+        if not is_land:
+            permanent_mana = any(
+                re.search(r"\{t\}[^.\n]*:\s*add\b", line) and "sacrifice" not in line
+                for rules in evidence for line in rules.splitlines()
+            )
+            land_ramp = re.search(
+                r"\b(?:search|put)\b[^.]*\bland\b[^.]*\bonto the battlefield\b", text
+            )
+            if permanent_mana or land_ramp:
+                self.persistent_ramp_count += count
+        for rules in evidence:
+            # Only inspect symbols after "add", not the ability's activation
+            # cost or symbols in unrelated damage/payment instructions.
+            for production in re.findall(r"\badds?\s+((?:\{[^}]+\}[\s,]*(?:or\s+|and\s+)?)+)", rules):
+                specific_colors.update(
+                    c.upper() for c in re.findall(r"\{([wubrg])\}", production)
+                )
+        # Heartwood is a fixed R/G source, even when a legacy card record has
+        # its creation text but lacks the linked token's rules.
+        if re.search(r"create\b[^.\n]*\bheartwood token", text):
+            specific_colors.update(("R", "G"))
+
+        specific_phrases = set(specific_fixing_map)
         is_universal = any(
-            phrase in text for phrase in constants.FIXING_KEYWORDS
-        ) or any(fn in name for fn in constants.FIXING_NAMES)
+            phrase.lower() in rules
+            for rules in evidence for phrase in constants.FIXING_KEYWORDS
+            if phrase not in specific_phrases and phrase != "choose a color"
+        ) or any(fn in name for fn in constants.FIXING_NAMES
+                 if fn not in restricted_fetches)
+        is_universal = is_universal or any(
+            re.search(r"\bcreate\b[^.\n]*\b(?:treasure|gold) tokens?", rules)
+            for rules in evidence
+        )
 
-        if (
-            "fixing_ramp" in tags
-            and not is_land
-            and not specific_match_found
-            and not is_universal
-        ):
-            produces_specific = False
-            for c_sym in constants.CARD_COLORS:
-                if (
-                    f"add {{{c_sym.lower()}}}" in text
-                    or f"adds {{{c_sym.lower()}}}" in text
-                ):
-                    self.sources[c_sym] += count
-                    produces_specific = True
-            if produces_specific:
-                self.total_fixing_cards += count
-            else:
-                is_universal = True
-
-        if is_universal and not specific_match_found:
+        if is_universal:
             if is_land:
                 self.any_color_land_sources += count
             else:
                 self.any_color_spell_sources += count
             self.total_fixing_cards += count
-            for c in card_colors:
+            for c in get_mana_colors(card):
                 if c in self.any_color_enabler_pips:
                     self.any_color_enabler_pips[c] += count
             return
 
-        if is_land and "Basic" not in types:
-            if not card_colors and "fixing_ramp" in tags and not specific_match_found:
-                self.any_color_land_sources += count
-                self.total_fixing_cards += count
-                return
-            for c in card_colors:
-                if c in self.sources:
-                    self.sources[c] += count
-            if len(card_colors) > 1 or "fixing_ramp" in tags:
-                self.total_fixing_cards += count
+        # Legacy land records may encode their produced colors in `colors`.
+        # A role tag alone supplies no evidence of any color production.
+        if is_land and not specific_colors:
+            specific_colors.update(card_colors)
+        for c in specific_colors:
+            self.sources[c] += count
+        if specific_colors and (not is_land or len(specific_colors) > 1):
+            self.total_fixing_cards += count
 
 
 def count_fixing(pool):
@@ -330,18 +419,7 @@ def count_fixing(pool):
 def get_strict_colors(spells):
     pips, hybrid_pips_list = {c: 0 for c in constants.CARD_COLORS}, []
     for card in spells:
-        cost = card.get("mana_cost", "")
-        if not cost:
-            for c in card.get("colors", []):
-                if c in pips:
-                    pips[c] += 1
-            continue
-        for pip in re.findall(r"\{(.*?)\}", cost):
-            if any(ch.isdigit() or ch in ["X", "C"] for ch in pip.split("/")):
-                continue
-            options = [c for c in pip.split("/") if c in constants.CARD_COLORS]
-            if not options:
-                continue
+        for options in get_color_requirements(card):
             if len(options) == 1:
                 pips[options[0]] += 1
             else:
@@ -364,17 +442,13 @@ def select_useful_lands(pool, target_colors, metrics=None):
             baseline_wr = b
 
     for card in pool:
-        name, types = card.get("name", ""), card.get("types", [])
+        name, types = card.get("name", ""), get_main_types(card)
         if name in constants.BASIC_LANDS or "Land" not in types or "Basic" in types:
             continue
 
-        text, card_colors = (
-            str(card.get("oracle_text", card.get("text", ""))).lower(),
-            card.get("colors", []),
-        )
-        is_universal = any(
-            phrase in text for phrase in constants.FIXING_KEYWORDS
-        ) or any(fn in name.lower() for fn in constants.FIXING_NAMES)
+        analyzer = ManaSourceAnalyzer([card])
+        card_colors = [c for c in constants.CARD_COLORS if analyzer.sources[c]]
+        is_universal = analyzer.any_color_sources > 0
         gihwr = float(
             card.get("deck_colors", {}).get("All Decks", {}).get("gihwr", 0.0)
         )
@@ -390,8 +464,7 @@ def select_useful_lands(pool, target_colors, metrics=None):
     colorless_lands = [
         c
         for c in useful_lands
-        if not c.get("colors")
-        and not any(fn in c.get("name", "").lower() for fn in constants.FIXING_NAMES)
+        if not any(count_fixing([c]).values())
     ]
     if len(colorless_lands) > 2:
         colorless_lands.sort(

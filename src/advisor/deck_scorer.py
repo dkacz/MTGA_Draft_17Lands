@@ -6,7 +6,10 @@ Evaluates pool strength, calculates holistic power scores, and identifies top la
 from src import constants
 from src.card_logic import get_functional_cmc
 from src.advisor.mana_base import ManaSourceAnalyzer
+from src.advisor.card_features import get_main_types, get_main_text, get_mana_colors
+from src.advisor.card_quality import blended_win_rate
 from src.sealed_logic import HeuristicEvaluator
+from src.utils import normalize_color_string
 
 TIER_TO_GIHWR = {
     "A+": 68.0,
@@ -36,20 +39,10 @@ def get_card_rating(card, colors, metrics=None, tier_data=None):
             global_mean = mean_val
             set_has_data = True
 
-    stats = card.get("deck_colors", {})
-    global_wr = float(stats.get("All Decks", {}).get("gihwr") or 0.0)
-
-    arch_key = (
-        "".join(sorted(colors)) if len(colors) <= 2 else "".join(sorted(colors[:2]))
-    )
-    arch_wr = float(stats.get(arch_key, {}).get("gihwr") or 0.0)
-
-    if arch_wr > 30.0 and global_wr > 30.0:
-        return (arch_wr * 0.7) + (global_wr * 0.3)
-    elif global_wr > 30.0:
-        return global_wr
-    elif arch_wr > 30.0:
-        return arch_wr
+    arch_key = normalize_color_string("".join(colors[:2]))
+    rating = blended_win_rate(card, arch_key, 0.7, global_mean)
+    if rating > 0.0:
+        return rating
 
     if tier_data:
         name, tier_scores = card.get("name", ""), []
@@ -62,10 +55,8 @@ def get_card_rating(card, colors, metrics=None, tier_data=None):
         if tier_scores:
             return sum(tier_scores) / len(tier_scores)
 
-    # In an established format (the set already has win-rate data), a card with
-    # no data of its own is one nobody drafts or plays — effectively unplayable
-    # (e.g. Worlds Within Worlds). Don't invent a generous score from a metadata
-    # heuristic; that fallback is only for Day 1 before any data exists.
+    # The user's established policy leaves missing published ratings at zero.
+    # This is an availability policy, not evidence that the card is unplayable.
     if set_has_data:
         return 0.0
 
@@ -85,7 +76,7 @@ def identify_top_pairs(pool, metrics, tier_data=None):
     scores = {c: 0.0 for c in constants.CARD_COLORS}
 
     for card in pool:
-        colors = card.get(constants.DATA_FIELD_COLORS, [])
+        colors = get_mana_colors(card)
         wr = get_card_rating(card, ["All Decks"], metrics, tier_data)
         if wr > playable_baseline:
             points = (wr - playable_baseline) / global_std
@@ -112,26 +103,19 @@ def calculate_holistic_score(deck, colors, pool_size, metrics, tier_data=None):
     if global_std == 0.0:
         global_std = 4.0
 
-    spells = [c for c in deck if constants.CARD_TYPE_LAND not in c.get("types", [])]
+    spells = [c for c in deck if constants.CARD_TYPE_LAND not in get_main_types(c)]
     spell_count = sum(c.get("count", 1) for c in spells)
     if spell_count == 0:
         return 0.0, ""
 
-    arch_key = (
-        "".join(sorted(colors)) if len(colors) <= 2 else "".join(sorted(colors[:2]))
-    )
-    valid_ratings = [
-        get_card_rating(c, [arch_key], metrics)
+    arch_key = normalize_color_string("".join(colors[:2]))
+    ratings = [
+        get_card_rating(c, [arch_key], metrics, tier_data)
         for c in spells
         for _ in range(c.get("count", 1))
-        if get_card_rating(c, [arch_key], metrics) > 0.0
     ]
-
-    avg_gihwr = (
-        sum(valid_ratings) / len(valid_ratings)
-        if valid_ratings
-        else global_mean - global_std
-    )
+    # Unrated spells remain zero rather than disappearing from the denominator.
+    avg_gihwr = sum(ratings) / len(ratings) if ratings else global_mean - global_std
     z_score = (avg_gihwr - global_mean) / global_std
     power_level = 75.0 + (z_score * 12.0)
     breakdown_notes = []
@@ -139,21 +123,8 @@ def calculate_holistic_score(deck, colors, pool_size, metrics, tier_data=None):
     cmcs = [get_functional_cmc(c) for c in spells for _ in range(c.get("count", 1))]
     avg_cmc = sum(cmcs) / spell_count
 
-    land_count = sum(c.get("count", 1) for c in deck if "Land" in c.get("types", []))
-    ramp_count = min(
-        3,
-        sum(
-            c.get("count", 1)
-            for c in deck
-            if (
-                "fixing_ramp" in c.get("tags", [])
-                or "treasure" in str(c.get("oracle_text", c.get("text", ""))).lower()
-                or "add {" in str(c.get("oracle_text", c.get("text", ""))).lower()
-                or "adds {" in str(c.get("oracle_text", c.get("text", ""))).lower()
-            )
-            and "Land" not in c.get("types", [])
-        ),
-    )
+    land_count = sum(c.get("count", 1) for c in deck if "Land" in get_main_types(c))
+    ramp_count = min(3, ManaSourceAnalyzer(deck).persistent_ramp_count)
 
     mana_deficit = (avg_cmc * 5.5) - (land_count + ramp_count)
     if mana_deficit > 1.5:

@@ -174,3 +174,15 @@ def test_metrics_unknown_field(otj_premier):
 
     assert mean == 0.0
     assert std == 0.0
+
+
+def test_format_texture_counts_unique_names_not_arena_variants():
+    from unittest.mock import MagicMock
+    card = {"name": "One printed card", "rarity": "common", "cmc": 2,
+            "types": ["Creature"], "colors": ["U"], "tags": ["removal"],
+            "deck_colors": {"All Decks": {"gihwr": 55}}}
+    ds = MagicMock()
+    ds.get_card_ratings.return_value = {"100": card, "101": dict(card)}
+    texture = SetMetrics(ds).format_texture["U"]
+    assert texture["2-drop"] == 1
+    assert texture["removal"] == 1
