@@ -4,6 +4,8 @@
 * dkacz: Draft progress follows the observed booster size, signals decay with age, and format-role counts exclude duplicate Arena printings.
 * dkacz: Local, read-only Arena metadata separates primary cards from prepared spells. Hybrid costs are payment alternatives, and fixing requires documented mana production rather than a generic tag.
 * dkacz: Deck construction counts fixing once, excludes basic lands from utility-land replacement, and recognizes the verified artifact-token replacement when assessing token mana. Scoring remains heuristic, without automatic tier-list integration.
+* dkacz: Land recommendations reflect the current color plan and planned splashes. Opponent-created tokens and explicitly restricted mana no longer provide general fixing or ramp; the builder's simulator reads the same verified nonbasic and token sources.
+* dkacz: Landcycling no longer fills an early creature/removal role, and token-replacement effects no longer count as their own artifact-token generators.
 
 ===================== RELEASE NOTES 4.23 (FRA fork) =====================
 * dkacz: Refreshing a manual dataset now replaces the previous download for the same set, draft format, player group, and time-period preset instead of creating another daily snapshot.

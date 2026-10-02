@@ -51,6 +51,36 @@ def get_main_text(card):
     return str(face.get("oracle_text") or face.get("text") or "")
 
 
+def get_own_token_creation_text(card_or_text):
+    """Return evidenced own token-creation clauses, excluding replacements.
+
+    Imperative ``create`` and explicit ``you create`` refer to our controller.
+    Obvious other creators are excluded conservatively. This is a small English
+    text check, not a rules parser or an estimate of when tokens become available.
+    """
+    text = (get_main_text(card_or_text) if isinstance(card_or_text, dict)
+            else str(card_or_text or ""))
+    own_clauses = []
+    for ability in text.splitlines():
+        # Replacing existing token creation does not generate its own enabler.
+        if re.search(r"\bwould\s+(?:be\s+)?create(?:d)?\b[^\n]*\binstead\b",
+                     ability, re.IGNORECASE):
+            continue
+        for match in re.finditer(
+            r"\bcreate\b(?=[^.\n]*(?:\btokens?\b|\b(?:treasure|gold|heartwood)\b))[^.\n]*",
+            ability, re.IGNORECASE,
+        ):
+            prefix = ability[:match.start()].rsplit(".", 1)[-1].lower()
+            explicit_you = re.search(r"\byou\s+(?:(?:may|then|must|also)\s+)*$", prefix)
+            other_creator = re.search(
+                r"\b(?:they|(?:target|that|chosen|each|an|the)\s+(?:opponent|player)"
+                r"|(?:its|their)\s+(?:controller|owner))\b[^,.:]*$", prefix,
+            )
+            if not other_creator or explicit_you:
+                own_clauses.append(match.group())
+    return "\n".join(own_clauses)
+
+
 def get_mana_colors(card):
     """Colors offered by the main cost, including both sides of hybrid pips.
 

@@ -9,7 +9,8 @@ import numpy as np
 
 from src import constants
 from src.advisor.card_features import (
-    get_main_types, get_main_mana_cost, get_main_text, get_mana_colors, is_on_color,
+    get_main_cmc, get_main_types, get_main_mana_cost, get_main_text,
+    get_mana_colors, get_own_token_creation_text, is_on_color,
 )
 from src.advisor.card_quality import (
     blended_win_rate, observed_win_rate, sample_count, stats_for,
@@ -140,7 +141,7 @@ class DraftAdvisor:
                     z_score=round(quality_z, 2), cast_probability=cast_fit,
                     wheel_chance=wheel_pct, functional_cmc=get_functional_cmc(card),
                     reasoning=reasons, is_elite=elite,
-                    archetype_fit=self.main_archetype if not self.main_colors or is_on_color(card, self.main_colors) else "Splash/Speculative",
+                    archetype_fit=self._archetype_fit(card, cast_fit, cast_reason),
                     tags=card.get("tags", []),
                 ))
             except (TypeError, ValueError, KeyError) as exc:
@@ -169,6 +170,13 @@ class DraftAdvisor:
         return main, counts
 
     @staticmethod
+    def _role_cmc(card):
+        # Cycling finds a land; it does not supply the creature/removal effect.
+        if "landcycling" in get_main_text(card).lower():
+            return get_main_cmc(card)
+        return get_functional_cmc(card)
+
+    @staticmethod
     def _roles(cards):
         result = {"early_plays": 0, "hard_removal_count": 0, "interaction": 0,
                   "creature_count": 0, "heavy_drops": 0, "artifacts": 0,
@@ -176,7 +184,7 @@ class DraftAdvisor:
                   "graveyard_enablers": 0, "counters_enablers": 0}
         for card in cards:
             types, tags = get_main_types(card), card.get("tags", [])
-            text, cmc = get_main_text(card).lower(), get_functional_cmc(card)
+            text, cmc = get_main_text(card).lower(), DraftAdvisor._role_cmc(card)
             creature = "Creature" in types
             interaction = "removal" in tags
             result["creature_count"] += creature
@@ -184,7 +192,8 @@ class DraftAdvisor:
             result["interaction"] += interaction
             result["hard_removal_count"] += bool(re.search(r"(?:destroy|exile) target (?:\w+ )?creature", text))
             result["heavy_drops"] += cmc >= 5 and "Land" not in types
-            token_maker = "create" in text and any(word in text for word in (
+            creation = get_own_token_creation_text(card).lower()
+            token_maker = any(word in creation for word in (
                 "artifact token", "heartwood", "treasure token", "clue token", "food token", "thopter",
             ))
             result["artifacts"] += "Artifact" in types or token_maker
@@ -259,7 +268,7 @@ class DraftAdvisor:
         color = colors[0]
         texture = getattr(self.metrics, "format_texture", {}).get(color, {})
         roles = []
-        if "Creature" in get_main_types(card) and get_functional_cmc(card) <= 2:
+        if "Creature" in get_main_types(card) and self._role_cmc(card) <= 2:
             roles.append(("2-drop", "2-Drops"))
         if "removal" in card.get("tags", []):
             roles.append(("removal", "interaction"))
@@ -276,6 +285,8 @@ class DraftAdvisor:
         # This is a planning factor, not a probability of drawing/producing mana.
         # Card strength must never change the factor for an unchanged mana plan.
         lane = self.main_colors[:2]
+        if lane and "Land" in get_main_types(card):
+            return self._land_fit(card, pack)
         if not lane or is_on_color(card, lane):
             return 1.0, ""
         cost = get_main_mana_cost(card)
@@ -299,6 +310,42 @@ class DraftAdvisor:
         if support >= 1:
             return (0.25 if pack == 2 else 0.2), "Limited splash support"
         return (0.05 if pack == 2 else 0.01), "Off-color without documented sources"
+
+    def _land_fit(self, card, pack):
+        sources = ManaSourceAnalyzer([card])
+        if sources.any_color_sources:
+            return 1.0, "Fixes current color plan"
+        produced = {c for c, count in sources.sources.items() if count > 0}
+        if not produced:
+            # Colorless utility is separate from colored fixing; keep its
+            # observed value instead of rejecting it for having no WUBRG.
+            return 1.0, "Colorless utility land"
+        lane = set(self.main_colors[:2])
+        targets = lane | set(self.pool_metrics.get("splash_targets", set()))
+        useful = produced & targets
+        if useful == produced:
+            reason = "Fixes current color plan" if produced <= lane else "Fixes planned splash"
+            return 1.0, reason
+        if pack == 1:
+            optionality = max(0.4, 1.0 - max(0, self.picks_completed - 7) * 0.05)
+            return optionality, "Land outside current color plan"
+        if useful:
+            return len(useful) / len(produced), "Only some produced colors fit the plan"
+        return (0.05 if pack == 2 else 0.01), "Land outside current color plan"
+
+    def _archetype_fit(self, card, cast_fit, cast_reason):
+        if self.main_colors and "Land" in get_main_types(card):
+            if cast_reason == "Colorless utility land":
+                return "Utility Land"
+            if cast_reason == "Fixes planned splash":
+                return "Splash Fixing"
+            if cast_reason == "Land outside current color plan":
+                return "Outside Color Plan"
+            if cast_fit < 1.0:
+                return "Partial Fixing"
+        if not self.main_colors or is_on_color(card, self.main_colors):
+            return self.main_archetype
+        return "Splash/Speculative"
 
     def _check_relative_wheel(self, card, pick, rank_in_pack):
         if pick >= 9:

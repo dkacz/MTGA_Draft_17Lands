@@ -15,8 +15,21 @@ from src.advisor.card_features import (
     get_main_text,
     get_main_types,
     get_mana_colors,
+    get_own_token_creation_text,
     is_on_color,
 )
+
+
+def _has_mana_spending_restriction(text):
+    """Exclude obvious spend limits from general support, without modeling them."""
+    text = str(text or "").lower().replace("’", "'")
+    return bool(re.search(
+        r"\b(?:spend|use)\b[^.\n]*\bmana\b[^.\n]*\bonly\b"
+        r"|\bmana\b[^.\n]*\b(?:can't|cannot|may not|only)\b[^.\n]*\b(?:spent|spend|used|use|cast)\b"
+        r"|\bmana\b[^.\n]*\b(?:spent|used)\b[^.\n]*\bonly\b"
+        r"|\b(?:can't|cannot|may not)\b[^.\n]*\b(?:spend|use)\b[^.\n]*\bmana\b",
+        text,
+    ))
 
 
 def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17):
@@ -225,8 +238,9 @@ class ManaSourceAnalyzer:
             suppress_artifact_token_mana
             if suppress_artifact_token_mana is not None
             else any(re.search(
-                r"artifact tokens would be created\b[^.]*\bdragon creature tokens\b"
-                r"[^.]*\bcreated instead\b", get_main_text(card).lower()
+                r"(?:artifact tokens would be created\b|you would create\b[^.]*\bartifact tokens\b)"
+                r"[^.]*\bdragon(?: creature)? tokens\b[^.]*\binstead\b",
+                get_main_text(card).lower(),
             ) for card in pool)
         )
         self.sources = {c: 0 for c in constants.CARD_COLORS}
@@ -253,6 +267,19 @@ class ManaSourceAnalyzer:
         card_colors, is_land = get_main_colors(card), "Land" in types
         if is_land and ("Basic" in types or card.get("name") in constants.BASIC_LANDS):
             return
+        # Specialized casting/activation uses need their own model. They cannot
+        # fund arbitrary spells from hand or reduce general mana pressure.
+        if _has_mana_spending_restriction(text):
+            return
+
+        # Do not let a foreign token's quoted mana ability, creation phrase, or
+        # stale linked metadata become our mana. Preserve independent abilities.
+        text = "\n".join(
+            line for line in re.split(r"(?<=\.)|\n", text)
+            if not (re.search(r"\bcreate\b", line)
+                    and re.search(r"\b(?:tokens?|treasure|gold|heartwood)\b", line)
+                    and not get_own_token_creation_text(line))
+        )
 
         specific_fixing_map = {
             "plainscycling": "W",
@@ -282,7 +309,31 @@ class ManaSourceAnalyzer:
             if fetch_name in name:
                 specific_colors.update(fetched_colors)
 
-        produced_tokens = get_main_face(card).get("produced_tokens", [])
+        own_creation_text = get_own_token_creation_text(text).lower()
+        produced_tokens = (get_main_face(card).get("produced_tokens", [])
+                           if own_creation_text else [])
+        restricted_tokens = [token for token in produced_tokens
+                             if _has_mana_spending_restriction(get_main_text(token))]
+        if restricted_tokens:
+            blocked_names = [str(token.get("name") or "").lower()
+                             for token in restricted_tokens]
+            # Explicit token restrictions override a generic Treasure/Heartwood
+            # fallback in the maker's text, including older enriched records.
+            text = "\n".join(
+                line for line in re.split(r"(?<=\.)|\n", text)
+                if not (get_own_token_creation_text(line)
+                        and any(not name or name in line for name in blocked_names))
+            )
+            produced_tokens = [token for token in produced_tokens
+                               if token not in restricted_tokens]
+        # Older overlays can contain both our and another player's linked
+        # tokens. Their names must be present in the surviving own creation.
+        own_creation_text = get_own_token_creation_text(text).lower()
+        produced_tokens = [
+            token for token in produced_tokens
+            if token.get("name")
+            and str(token["name"]).lower() in own_creation_text
+        ]
         artifact_token_names = [
             str(token.get("name") or "").lower() for token in produced_tokens
             if "Artifact" in get_main_types(token)
@@ -296,7 +347,7 @@ class ManaSourceAnalyzer:
                 ))
             )
         evidence = [text]
-        if "create" in text:
+        if get_own_token_creation_text(text):
             evidence.extend(
                 get_main_text(token).lower() for token in produced_tokens
                 if not (self.suppresses_artifact_token_mana

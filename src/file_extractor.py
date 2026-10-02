@@ -16,6 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict
 from src import constants
+from src.advisor.card_features import get_own_token_creation_text
 from src.logger import create_logger
 from src.utils import Result, check_file_integrity, clean_string
 from src.ui_progress import UIProgress
@@ -136,12 +137,23 @@ def _arena_metadata(rows, card_text, card_enumerators):
             if linked_id.isdigit() and int(linked_id) in rows
         ]
         # Token rule text supplies production evidence, e.g. Heartwood's R/G.
-        # A reference alone is insufficient: the main card must create a token.
-        if "create" in primary["oracle_text"].lower():
+        # A reference alone is insufficient: this particular ability must create
+        # our token, rather than giving an opponent a token or replacing creation.
+        if get_own_token_creation_text(primary):
+            ability_texts = {
+                ability_id: _normalize_arena_text(card_text[int(loc_id)])
+                for ability_id, loc_id in re.findall(
+                    r"(\d+):(\d+)", row.get("abilityids") or ""
+                ) if int(loc_id) in card_text
+            }
             token_ids = dict.fromkeys(
-                int(x) for x in re.findall(
-                    r"\d+:(\d+)", row.get("abilityidtolinkedtokengrpid") or ""
-                )
+                int(token_id) for ability_id, token_id in re.findall(
+                    r"(\d+):(\d+)", row.get("abilityidtolinkedtokengrpid") or ""
+                ) if get_own_token_creation_text(ability_texts.get(ability_id, ""))
+                and int(token_id) in rows
+                and card_text.get(rows[int(token_id)].get("titleid"))
+                and card_text.get(rows[int(token_id)].get("titleid"), "").lower()
+                in get_own_token_creation_text(ability_texts.get(ability_id, "")).lower()
             )
             produced_tokens = [face(rows[x]) for x in token_ids
                                if x in rows and rows[x].get("istoken")]

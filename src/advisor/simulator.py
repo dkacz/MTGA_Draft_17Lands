@@ -1,21 +1,27 @@
 import numpy as np
 from numba import njit
 import re
+from src import constants
+from src.advisor.card_features import get_main_face, get_main_mana_cost, get_main_types
+from src.advisor.mana_base import ManaSourceAnalyzer
 from src.card_logic import get_functional_cmc
 
 # Mana Bitmask Mapping
 COLOR_BITS = {"W": 1, "U": 2, "B": 4, "R": 8, "G": 16}
+BASIC_MANA_BITS = {"Plains": 1, "Island": 2, "Swamp": 4, "Mountain": 8, "Forest": 16}
 
 
 def _parse_deck_to_arrays(deck_list):
     """Converts the deck from slow Python dicts to fast NumPy arrays."""
     flat_deck = []
     for c in deck_list:
-        flat_deck.extend([c] * int(c.get("count", 1)))
+        flat_deck.extend([{**c, "count": 1}] * int(c.get("count", 1)))
 
     if len(flat_deck) < 40:
         return None
 
+    flat_deck = flat_deck[:40]
+    deck_sources = ManaSourceAnalyzer(flat_deck)
     is_land = np.zeros(40, dtype=np.bool_)
     is_ramp = np.zeros(40, dtype=np.bool_)
     is_removal = np.zeros(40, dtype=np.bool_)
@@ -23,31 +29,36 @@ def _parse_deck_to_arrays(deck_list):
     mana_produced = np.zeros(40, dtype=np.int32)
     primary_req = np.zeros(40, dtype=np.int32)
 
-    for i, c in enumerate(flat_deck[:40]):
-        types = c.get("types", [])
+    for i, c in enumerate(flat_deck):
+        types = get_main_types(c)
         tags = c.get("tags", [])
-        text = str(c.get("oracle_text", c.get("text", ""))).lower()
 
         is_land[i] = "Land" in types
-        is_ramp[i] = (
-            "fixing_ramp" in tags or "any color" in text or "treasure" in text
-        ) and not is_land[i]
         is_removal[i] = "removal" in tags
         cmcs[i] = get_functional_cmc(c)
 
-        # Calculate produced mana bitmask
-        if is_land[i] or is_ramp[i]:
-            if "any color" in text or "fixing_ramp" in tags:
-                mana_produced[i] = 31  # 1+2+4+8+16 (WUBRG)
-            else:
-                mask = 0
-                for color in c.get("colors", []):
-                    mask |= COLOR_BITS.get(color, 0)
-                mana_produced[i] = mask
+        name = get_main_face(c).get("name", c.get("name", ""))
+        if is_land[i] and ("Basic" in types or name in constants.BASIC_LANDS):
+            # The shared analyzer deliberately excludes basics. Their names
+            # identify production even when enriched metadata has colors=[].
+            mana_produced[i] = BASIC_MANA_BITS.get(name.removeprefix("Snow-Covered "), 0)
+        else:
+            sources = ManaSourceAnalyzer(
+                [c],
+                suppress_artifact_token_mana=deck_sources.suppresses_artifact_token_mana,
+            )
+            # Masks describe evidenced color access (including fetch/cycling),
+            # retaining the simulator's approximation of activation timing.
+            mask = 31 if sources.any_color_sources else 0
+            for color, bit in COLOR_BITS.items():
+                if sources.sources[color]:
+                    mask |= bit
+            mana_produced[i] = mask
+            is_ramp[i] = not is_land[i] and (mask > 0 or sources.persistent_ramp_count > 0)
 
         # Calculate primary pip requirement bitmask
         if not is_land[i]:
-            cost = c.get("mana_cost", "")
+            cost = get_main_mana_cost(c)
             mask = 0
             matches = re.findall(r"\{(.*?)\}", cost)
             for pip in matches:

@@ -165,3 +165,29 @@ def test_extract_types_identifies_all_categories():
 
     res3 = extract_types("Sorcery")
     assert "Sorcery" in res3
+
+
+@pytest.mark.parametrize("ability, expected_tokens", [
+    ("Create a Treasure token.", ["Treasure"]),
+    ("When this enters, destroy target permanent an opponent controls. They create a Treasure token.", []),
+    ("If artifact tokens would be created under your control, Dragon tokens are created instead.", []),
+    ("If you would create artifact tokens, create Dragon tokens instead.", []),
+    ("Create a Clue token. They create a Treasure token.", ["Clue"]),
+])
+def test_metadata_attaches_only_named_tokens_created_by_our_ability(ability, expected_tokens):
+    from src.file_extractor import _arena_metadata
+
+    source = {"grpid": 1, "titleid": 1, "types": "2", "colors": "", "oldschoolmanatext": "o2",
+              "abilityids": "10:10", "abilityidtolinkedtokengrpid": "10:2,10:3", "istoken": 0}
+    treasure = {"grpid": 2, "titleid": 2, "types": "1", "colors": "", "oldschoolmanatext": "",
+                "abilityids": "20:20", "istoken": 1}
+    clue = {"grpid": 3, "titleid": 3, "types": "1", "colors": "", "oldschoolmanatext": "",
+            "abilityids": "30:30", "istoken": 1}
+    localizations = {1: "Source", 2: "Treasure", 3: "Clue", 10: ability,
+                     20: "{oT}, Sacrifice this token: Add one mana of any color.",
+                     30: "{o2}, Sacrifice this token: Draw a card.", 100: "Artifact", 200: "Creature"}
+    metadata = _arena_metadata([source, treasure, clue], localizations,
+                               {"types": {1: 100, 2: 200}, "colors": {}})
+    tokens = metadata[1].get("produced_tokens", [])
+    assert [token["name"] for token in tokens] == expected_tokens
+    assert metadata[1]["main_face"].get("produced_tokens", []) == tokens

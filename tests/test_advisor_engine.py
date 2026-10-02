@@ -177,3 +177,66 @@ def test_verified_artifact_token_synergy_needs_rules_text(mock_metrics):
     visitor = card("Visitor", cmc=5, text="If you would create artifact tokens, create 5/5 Dragon creature tokens instead.")
     assert advisor._verified_synergy(visitor)[0] > 0
     assert advisor._verified_synergy(dict(visitor, oracle_text=""))[0] == 0
+
+
+def land(name, produced):
+    result = card(name, types=["Land"], cost="", cmc=0,
+                  text="{T}: Add " + " or ".join("{" + c + "}" for c in produced) + ".")
+    result["colors"] = []  # Card colors are distinct from produced mana.
+    return result
+
+
+@pytest.mark.parametrize("pack", [2, 3])
+def test_land_fit_uses_actual_production_in_current_plan(mock_metrics, pack):
+    advisor = DraftAdvisor(mock_metrics, [card(colors=[c], wr=60) for c in "UB" for _ in range(12)])
+    candidates = [land("UB dual", "UB"), land("RG dual", "RG"),
+                  land("UG dual", "UG"), land("Utility", "C")]
+    results = {r.card_name: r for r in advisor.evaluate_pack(candidates, 1, current_pack=pack)}
+    assert results["UB dual"].cast_probability == 1
+    assert results["UB dual"].archetype_fit == "UB"
+    assert results["RG dual"].cast_probability < results["UG dual"].cast_probability < 1
+    assert results["RG dual"].contextual_score < results["UB dual"].contextual_score
+    assert results["RG dual"].archetype_fit == "Outside Color Plan"
+    assert results["UG dual"].archetype_fit == "Partial Fixing"
+    assert results["Utility"].cast_probability == 1
+    assert results["Utility"].archetype_fit == "Utility Land"
+    assert candidates[0]["colors"] == []
+
+
+def test_land_supporting_a_selected_splash_keeps_fit(mock_metrics):
+    pool = [card(colors=[c], wr=60) for c in "UB" for _ in range(12)]
+    pool.append(card("Red splash bomb", colors=["R"], wr=65, cost="{4}{R}", cmc=5))
+    advisor = DraftAdvisor(mock_metrics, pool)
+    assert set(advisor.main_colors) == {"U", "B"}
+    assert advisor.pool_metrics["splash_targets"] == {"R"}
+    result = rec(advisor, land("UR dual", "UR"), current_pack=3)
+    assert result.cast_probability == 1
+    assert result.archetype_fit == "Splash Fixing"
+
+
+@pytest.mark.parametrize("types,tags,cmc", [(["Creature"], [], 6), (["Sorcery"], ["removal"], 5)])
+def test_landcycling_does_not_supply_an_early_spell_role(mock_metrics, types, tags, cmc):
+    candidate = card("Landcycler", cmc=cmc, cost="{4}{G}", types=types, tags=tags,
+                     text="Basic landcycling {1}{G}.")
+    roles = DraftAdvisor._roles([candidate])
+    assert roles["early_plays"] == 0
+    assert roles["heavy_drops"] == 1
+    advisor = DraftAdvisor(mock_metrics, [candidate])
+    assert advisor.fixing_map["U"] == 1
+    assert advisor._scarcity_bonus(candidate, 1)[0] == (3 if tags else 0)
+
+
+def test_visitor_needs_a_real_own_artifact_token_maker(mock_metrics):
+    visitor = card("Visitor", cmc=5, wr=60,
+                   text="If one or more artifact tokens would be created under your control, "
+                        "that many 5/5 red Dragon creature tokens with flying are created instead.")
+    roles = DraftAdvisor._roles([visitor])
+    assert roles["artifact_token_payoffs"] == 1
+    assert roles["artifact_token_makers"] == roles["artifacts"] == 0
+    opponent_maker = card("Opponent treasure", text="Target opponent creates a Treasure token.")
+    assert DraftAdvisor._roles([opponent_maker])["artifact_token_makers"] == 0
+    advisor = DraftAdvisor(mock_metrics, [visitor, opponent_maker] + [card(wr=60) for _ in range(15)])
+    assert advisor._verified_synergy(visitor)[0] == 0
+    own_maker = card("Aerid", wr=60, text="Whenever you cast a spell, create a Heartwood token.")
+    with_maker = DraftAdvisor(mock_metrics, [visitor, own_maker] + [card(wr=60) for _ in range(15)])
+    assert with_maker._verified_synergy(visitor)[0] > 0

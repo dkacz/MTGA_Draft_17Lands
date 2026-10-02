@@ -9,6 +9,9 @@ use the strongest playable main-deck candidates for curve and role needs, and
 avoid rebuilding many decks for every Pack 3 recommendation. Draft progress
 uses the observed booster size. Local Arena metadata separates the main card
 from its prepared spell and provides evidence for hybrid costs and mana sources.
+Lands are evaluated against the current colors and planned splashes. General
+mana support excludes opponent-created tokens and explicitly restricted mana;
+the deck simulator uses the same verified sources, including nonbasic lands.
 Cards without published statistics retain a zero Advisor score. Value and mana
 fit are heuristics; wheel estimates are shown separately and do not reduce Value.
 
