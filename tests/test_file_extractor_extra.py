@@ -112,13 +112,13 @@ def test_initialize_17lands_data():
     assert extractor.card_dict["1001"]["types"] == []
 
 
-@patch("src.file_extractor.check_file_integrity", return_value=(Result.VALID, {}))
 @patch("src.utils.invalidate_local_set_cache")
-@patch("src.file_extractor.json.dump")
-@patch("src.file_extractor.open", new_callable=MagicMock)
-def test_export_card_data(mock_open, mock_dump, mock_invalidate, mock_integrity):
-    """Verify that dataset exports create the correctly formatted filename and invalidate the UI's fast-cache."""
-    from src.file_extractor import FileExtractor
+def test_export_card_data(mock_invalidate, tmp_path, monkeypatch):
+    """The period identifies an export; dates stay in its metadata."""
+    import json
+    from src import constants
+
+    monkeypatch.setattr(constants, "SETS_FOLDER", str(tmp_path))
 
     extractor = FileExtractor(None, MagicMock(), MagicMock(), MagicMock())
     extractor.start_date = "2024-01-01"
@@ -128,13 +128,20 @@ def test_export_card_data(mock_open, mock_dump, mock_invalidate, mock_integrity)
     extractor.time_period = "LATEST_EVENT"
     extractor.selected_sets = MagicMock()
     extractor.selected_sets.seventeenlands = ["OTJ"]
+    extractor.combined_data = {
+        "meta": {
+            "version": 3.0,
+            "start_date": extractor.start_date,
+            "end_date": extractor.end_date,
+            "time_period": extractor.time_period,
+        },
+        "card_ratings": {str(i): {"name": f"Card {i}"} for i in range(10)},
+    }
 
     filename = extractor.export_card_data()
 
-    # The stamp encodes the time_period preset so downloads of different
-    # presets on the same day don't overwrite each other.
-    assert "OTJ_PremierDraft_All_Custom-LatestEvent-20240201_Data.json" in filename
-    mock_dump.assert_called_once()
+    assert filename == "OTJ_PremierDraft_All_Custom-LatestEvent_Data.json"
+    assert json.loads((tmp_path / filename).read_text()) == extractor.combined_data
     mock_invalidate.assert_called_once()
 
 

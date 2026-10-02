@@ -9,6 +9,7 @@ import itertools
 import glob
 import re
 import sqlite3
+import tempfile
 from typing import Dict
 from src import constants
 from src.logger import create_logger
@@ -1372,19 +1373,15 @@ class FileExtractor(UIProgress):
         return result
 
     def export_card_data(self):
-        """Build the file for the set data"""
+        """Replace the dataset for this set, format, group and period safely."""
+        temporary_path = None
         try:
-            import time
-
-            # Stamp with the time_period preset (underscore-free so the
-            # filename still splits into 5 segments) plus the fetch date, so
-            # different presets downloaded the same day don't overwrite each
-            # other.
+            # Keep one file per preset. Fetch dates belong in the metadata;
+            # including them in the filename creates a new dataset every day.
             period_stamp = "".join(
                 part.capitalize() for part in self.time_period.split("_")
             )
-            e_clean = self.end_date.replace("-", "")
-            custom_stamp = f"Custom-{period_stamp}-{e_clean}"
+            custom_stamp = f"Custom-{period_stamp}"
 
             output_file = "_".join(
                 (
@@ -1397,23 +1394,57 @@ class FileExtractor(UIProgress):
             )
             location = os.path.join(constants.SETS_FOLDER, output_file)
 
-            with open(location, "w", encoding="utf-8", errors="replace") as file:
+            # Validate a sibling temporary file before replacing the last
+            # usable dataset. Readers never see a partially written JSON file.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                errors="replace",
+                dir=constants.SETS_FOLDER,
+                prefix=".dataset-",
+                suffix=".tmp",
+                delete=False,
+            ) as file:
+                temporary_path = file.name
                 json.dump(self.combined_data, file)
 
-            # Verify that the file was written
-            write_data = check_file_integrity(location)
+            if check_file_integrity(temporary_path)[0] != Result.VALID:
+                return ""
 
-            if write_data[0] != Result.VALID:
-                if os.path.exists(location):
-                    os.remove(location)
-                output_file = ""
-            else:
-                from src.utils import invalidate_local_set_cache
+            os.replace(temporary_path, location)
+            temporary_path = None
 
-                invalidate_local_set_cache()
+            # Migrate the old daily filenames only after the replacement is
+            # ready. Other periods, player groups and draft formats stay intact.
+            snapshot_prefix = output_file.removesuffix(f"_{constants.SET_FILE_SUFFIX}")
+            snapshot_pattern = re.compile(
+                re.escape(snapshot_prefix)
+                + r"-\d{8}_"
+                + re.escape(constants.SET_FILE_SUFFIX)
+            )
+            try:
+                for name in os.listdir(constants.SETS_FOLDER):
+                    if snapshot_pattern.fullmatch(name):
+                        try:
+                            os.remove(os.path.join(constants.SETS_FOLDER, name))
+                        except OSError as error:
+                            logger.warning(
+                                "Could not remove old dataset %s: %s", name, error
+                            )
+            except OSError as error:
+                logger.warning("Could not list old dataset snapshots: %s", error)
+
+            from src.utils import invalidate_local_set_cache
+
+            invalidate_local_set_cache()
+            return output_file
 
         except Exception as error:
             logger.error(error)
-            output_file = ""
-
-        return output_file
+            return ""
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.remove(temporary_path)
+                except OSError as error:
+                    logger.warning("Could not remove temporary dataset: %s", error)

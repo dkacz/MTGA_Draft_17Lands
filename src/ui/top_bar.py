@@ -13,7 +13,7 @@ from datetime import datetime
 
 from src import constants
 from src.ui.styles import Theme
-from src.utils import retrieve_local_set_list
+from src.utils import retrieve_local_set_list, latest_local_set_files
 from src.configuration import write_configuration
 
 logger = logging.getLogger(__name__)
@@ -317,7 +317,7 @@ class TopBarControls(ttk.Frame):
 
             normalized_current = normalize_code(current_set)
 
-            for f in all_files:
+            for f in latest_local_set_files(all_files):
                 file_set, f_event, f_group, _, _, _, f_path, _ = f
                 if normalize_code(file_set) != normalized_current:
                     continue
