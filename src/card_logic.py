@@ -15,6 +15,7 @@ import csv
 import json
 from src import constants
 from src.logger import create_logger
+from src.advisor.card_features import get_main_cmc, get_main_text, get_main_types
 
 logger = create_logger()
 
@@ -28,8 +29,8 @@ def get_functional_cmc(card: dict) -> int:
     Prevents expensive but highly playable cards from being falsely penalized as 'clunky'.
     """
     try:
-        raw_cmc = int(card.get("cmc", 0))
-        text = str(card.get("oracle_text", card.get("text", ""))).lower()
+        raw_cmc = int(get_main_cmc(card))
+        text = get_main_text(card).lower()
 
         if not text:
             return raw_cmc
@@ -178,7 +179,7 @@ def get_deck_metrics(deck):
     try:
         metrics.total_cards = len(deck)
         for card in deck:
-            c_types = card.get(constants.DATA_FIELD_TYPES, [])
+            c_types = get_main_types(card)
             c_cmc = get_functional_cmc(card)
 
             if constants.CARD_TYPE_LAND not in c_types:
@@ -277,7 +278,9 @@ def stack_cards(cards):
     for c in cards:
         name = c.get(constants.DATA_FIELD_NAME, "Unknown")
         if name not in stacked:
-            stacked[name] = copy.deepcopy(c)
+            # Only wrapper fields (count) are changed. Large rating maps and
+            # immutable face metadata can be shared with the source card.
+            stacked[name] = dict(c)
             stacked[name]["count"] = 1
         else:
             stacked[name]["count"] += 1
@@ -500,7 +503,7 @@ class CardResult:
         return val
 
 
-# === EXTRACTED LOGIC IMPORTS ===
+# === BACKWARDS-COMPATIBLE LOGIC EXPORTS ===
 from src.advisor.simulator import simulate_deck
 from src.advisor.mana_base import (
     calculate_dynamic_mana_base,
@@ -511,21 +514,26 @@ from src.advisor.mana_base import (
     get_strict_colors,
     select_useful_lands,
 )
-from src.advisor.deck_scorer import (
-    TIER_TO_GIHWR,
-    get_card_rating,
-    identify_top_pairs,
-    calculate_holistic_score,
-    estimate_record,
-)
-from src.advisor.deck_builder import (
-    GLOBAL_DECK_CACHE,
-    clear_deck_cache,
-    get_sideboard,
-    optimize_deck,
-    suggest_deck,
-    build_variant_consistency,
-    build_variant_greedy,
-    build_variant_curve,
-    build_variant_soup,
-)
+_SCORER_EXPORTS = {
+    "TIER_TO_GIHWR", "get_card_rating", "identify_top_pairs",
+    "calculate_holistic_score", "estimate_record",
+}
+_BUILDER_EXPORTS = {
+    "GLOBAL_DECK_CACHE", "clear_deck_cache", "get_sideboard", "optimize_deck",
+    "suggest_deck", "build_variant_consistency", "build_variant_greedy",
+    "build_variant_curve", "build_variant_soup",
+}
+
+
+def __getattr__(name):
+    # Both modules use the lightweight helpers above. Resolve their legacy
+    # exports on demand so importing either module first cannot form a cycle.
+    if name in _SCORER_EXPORTS:
+        from src.advisor import deck_scorer as module
+    elif name in _BUILDER_EXPORTS:
+        from src.advisor import deck_builder as module
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value

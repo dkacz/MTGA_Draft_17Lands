@@ -1,3 +1,10 @@
+===================== RELEASE NOTES 4.24 (FRA fork) =====================
+* dkacz: Advisor now applies canonical archetype ratings once with sample smoothing. Missing published statistics retain a zero Advisor score.
+* dkacz: Pack recommendations use a playable main-deck core for bounded curve and role adjustments. Pack 3 no longer rebuilds many deck variants for every candidate; wheel estimates no longer penalize Value.
+* dkacz: Draft progress follows the observed booster size, signals decay with age, and format-role counts exclude duplicate Arena printings.
+* dkacz: Local, read-only Arena metadata separates primary cards from prepared spells. Hybrid costs are payment alternatives, and fixing requires documented mana production rather than a generic tag.
+* dkacz: Deck construction counts fixing once, excludes basic lands from utility-land replacement, and recognizes the verified artifact-token replacement when assessing token mana. Scoring remains heuristic, without automatic tier-list integration.
+
 ===================== RELEASE NOTES 4.23 (FRA fork) =====================
 * dkacz: Refreshing a manual dataset now replaces the previous download for the same set, draft format, player group, and time-period preset instead of creating another daily snapshot.
 * dkacz: Existing duplicate snapshots now resolve to the newest end date and collection time in the scanner, dataset selectors, and Datasets table.

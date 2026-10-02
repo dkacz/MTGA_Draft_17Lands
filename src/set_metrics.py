@@ -2,6 +2,7 @@ import statistics as stats
 from typing import Tuple
 from pydantic import BaseModel
 from src.dataset import Dataset
+from src.advisor.card_features import get_main_types, get_main_cmc, get_mana_colors
 from src.constants import (
     DECK_COLORS,
     DATA_FIELD_NAME,
@@ -60,7 +61,12 @@ class SetMetrics:
         if not dataset_dict:
             return
 
+        processed_names = set()
         for card in dataset_dict.values():
+            name = card.get(DATA_FIELD_NAME)
+            if not name or name in processed_names:
+                continue
+            processed_names.add(name)
             rarity = str(card.get("rarity", "common")).lower()
             if rarity not in ["common", "uncommon"]:
                 continue
@@ -71,14 +77,14 @@ class SetMetrics:
             if gihwr < playable_threshold:
                 continue
 
-            colors = card.get("colors", [])
+            colors = get_mana_colors(card)
             # Skip colorless or 3+ color cards for raw texture counting to keep it focused on base colors
             if not colors or len(colors) > 2:
                 continue
 
             tags = card.get("tags", [])
-            cmc = int(card.get("cmc", 0))
-            types = card.get("types", [])
+            cmc = get_main_cmc(card)
+            types = get_main_types(card)
 
             is_2_drop = "Creature" in types and cmc <= 2
 

@@ -1,5 +1,6 @@
 from src import constants
 from src.card_logic import get_card_colors
+from src.advisor.card_features import get_mana_colors
 
 
 class SignalCalculator:
@@ -83,7 +84,7 @@ class SignalCalculator:
             self._distribute_score(card, val, bucket)
 
     def _distribute_score(self, card, score, bucket):
-        card_colors = card.get(constants.DATA_FIELD_COLORS, [])
+        card_colors = get_mana_colors(card)
         if not card_colors and constants.DATA_FIELD_MANA_COST in card:
             mana_colors = get_card_colors(card[constants.DATA_FIELD_MANA_COST])
             card_colors = list(mana_colors.keys())

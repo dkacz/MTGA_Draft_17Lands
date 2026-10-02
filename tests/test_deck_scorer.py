@@ -63,16 +63,14 @@ def test_get_card_rating_tier_fallback(mock_metrics):
     assert rating == 68.0
 
 
-def test_get_card_rating_no_data_in_established_set_is_unplayable(mock_metrics):
-    """A card with no win-rate data in a set that otherwise HAS data (mean > 0)
-    is one nobody plays (e.g. Worlds Within Worlds) — it must not be scored
-    generously from a metadata heuristic."""
+def test_get_card_rating_no_data_in_established_set_stays_unrated(mock_metrics):
+    """User policy keeps unpublished ratings at zero in a set with data."""
     # mock_metrics reports a 55.0 mean, i.e. the set has data.
     card = make_card("Worlds Within Worlds", colors=["G", "U"], cmc=7, gihwr=0.0)
 
     rating = get_card_rating(card, colors=["G", "U"], metrics=mock_metrics)
 
-    assert rating == 0.0, f"Dataless card scored {rating}; should be unplayable."
+    assert rating == 0.0, f"Dataless card scored {rating}; should stay unrated."
 
 
 def test_get_card_rating_no_data_day1_uses_heuristic():
@@ -242,3 +240,19 @@ def test_estimate_record():
     # BO3 (Traditional Draft)
     assert "3-0" in estimate_record(90.0, is_bo3=True)
     assert "0-2" in estimate_record(50.0, is_bo3=True)
+
+
+@pytest.mark.parametrize("pair", ["WU", "UB", "BR", "RG", "WG", "WB", "BG", "UG", "UR", "WR"])
+def test_rating_reads_all_canonical_archetypes(mock_metrics, pair):
+    from src.utils import normalize_color_string
+    c = make_card("Archetype card", gihwr=55)
+    c["deck_colors"][normalize_color_string(pair)] = {"gihwr": 65, "samples": 10000}
+    assert get_card_rating(c, list(pair), mock_metrics) > 55
+
+
+def test_unrated_spells_cannot_disappear_from_deck_quality(mock_metrics):
+    rated = make_card("Rated", count=23, gihwr=60)
+    unrated = make_card("Unknown", count=11, gihwr=0)
+    good = [make_card("Land", count=17, types=["Land"]), rated]
+    mixed = [make_card("Land", count=17, types=["Land"]), dict(rated, count=12), unrated]
+    assert calculate_holistic_score(mixed, ["G"], 42, mock_metrics)[0] < calculate_holistic_score(good, ["G"], 42, mock_metrics)[0]
