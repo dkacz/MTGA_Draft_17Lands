@@ -21,8 +21,16 @@ from src.advisor.card_features import (
 
 
 def _has_mana_spending_restriction(text):
-    """Exclude obvious spend limits from general support, without modeling them."""
+    """Exclude mana that cannot fund ordinary spells from hand, without modeling it.
+
+    This covers explicit spend limits and an instant-speed ability that
+    discards the hand as its cost (Lion's Eye Diamond): no spell remains in
+    hand to pay for, and casting cannot be interrupted to activate it.
+    """
     text = str(text or "").lower().replace("’", "'")
+    if (re.search(r"discard your hand[^:\n]*:[^\n]*\badd\b", text)
+            and "activate only as an instant" in text):
+        return True
     return bool(re.search(
         r"\b(?:spend|use)\b[^.\n]*\bmana\b[^.\n]*\bonly\b"
         r"|\bmana\b[^.\n]*\b(?:can't|cannot|may not|only)\b[^.\n]*\b(?:spent|spend|used|use|cast)\b"
@@ -50,11 +58,13 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
     any_color_enabler_pips = analyzer.any_color_enabler_pips
 
     for card in spells:
+        copies = card.get("count", 1)
         cost = get_main_mana_cost(card)
         cmc = int(get_main_cmc(card) or 99)
 
         if cost:
             card_color_pips = {c: 0 for c in constants.CARD_COLORS}
+            card_hybrid_pips = []
             for opts in get_color_requirements(card):
                 valid_opts = [
                     opt
@@ -67,11 +77,12 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
                 if len(valid_opts) == 1:
                     card_color_pips[valid_opts[0]] += 1
                 elif len(valid_opts) > 1:
-                    hybrid_pips.append((valid_opts, cmc))
+                    card_hybrid_pips.append((valid_opts, cmc))
 
+            hybrid_pips.extend(card_hybrid_pips * copies)
             for c, count in card_color_pips.items():
                 if count > 0:
-                    strict_pips[c] += count
+                    strict_pips[c] += count * copies
                     if count > max_pip_in_single_card[c]:
                         max_pip_in_single_card[c] = count
                     if cmc < lowest_cmc[c]:
@@ -79,7 +90,7 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
         else:
             for c in get_main_colors(card):
                 if c in colors:
-                    strict_pips[c] += 1
+                    strict_pips[c] += copies
                     max_pip_in_single_card[c] = max(1, max_pip_in_single_card[c])
                     lowest_cmc[c] = min(cmc, lowest_cmc[c])
 

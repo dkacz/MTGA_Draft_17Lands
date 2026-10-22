@@ -6,7 +6,7 @@ Challenges the status quo of Mana Base generation and Monte Carlo simulations.
 import pytest
 from collections import Counter
 from src.card_logic import build_variant_greedy, simulate_deck
-from src.advisor.mana_base import calculate_dynamic_mana_base
+from src.advisor.mana_base import ManaSourceAnalyzer, calculate_dynamic_mana_base, count_fixing
 from unittest.mock import MagicMock
 
 
@@ -21,6 +21,56 @@ def _spell(name, color, cmc=2, tags=None, text=""):
         "oracle_text": text,
         "deck_colors": {"All Decks": {"gihwr": 56.0}},
     }
+
+
+@pytest.mark.parametrize("demand_kind", ["printed", "color_fallback", "hybrid"])
+def test_dynamic_mana_base_stacked_matches_expanded_copies(demand_kind):
+    """The same 23 spells must receive the same basics regardless of stacking."""
+    if demand_kind == "hybrid":
+        # Four copies of a hybrid spell, plus two green and five red spells.
+        # Both representations must count all four hybrid pips as green.
+        spells = (
+            [_spell(f"Green {i}", "G", cmc=3) for i in range(2)]
+            + [_spell(f"Red {i}", "R", cmc=3) for i in range(5)]
+            + [dict(_spell("Hybrid", "G", cmc=3),
+                    mana_cost="{2}{G/U}", colors=["G", "U"], count=4)]
+        )
+        colors = ["G", "U", "R"]
+    else:
+        # Eight green spells across four names and five blue spells.
+        spells = [
+            dict(_spell(f"Green {i}", "G", cmc=3), count=2)
+            for i in range(4)
+        ]
+        if demand_kind == "color_fallback":
+            for card in spells:
+                card["mana_cost"] = ""
+        spells += [_spell(f"Blue {i}", "U", cmc=3) for i in range(5)]
+        colors = ["G", "U"]
+
+    # Complete a 40-card deck with colorless spells and the 17 requested basics.
+    filler_count = 23 - sum(c.get("count", 1) for c in spells)
+    spells += [
+        {"name": f"Colorless {i}", "types": ["Artifact"], "cmc": 3,
+         "mana_cost": "{3}", "colors": []}
+        for i in range(filler_count)
+    ]
+    expanded = [
+        dict(card, count=1)
+        for card in spells
+        for _ in range(card.get("count", 1))
+    ]
+    assert len(expanded) == 23
+
+    stacked_basics = calculate_dynamic_mana_base(spells, [], colors, forced_count=17)
+    expanded_basics = calculate_dynamic_mana_base(expanded, [], colors, forced_count=17)
+    stacked_counts = Counter(c["name"] for c in stacked_basics)
+    expanded_counts = Counter(c["name"] for c in expanded_basics)
+
+    assert sum(stacked_counts.values()) == sum(expanded_counts.values()) == 17
+    assert stacked_counts == expanded_counts, (
+        f"Same deck: stacked={dict(stacked_counts)}, expanded={dict(expanded_counts)}"
+    )
 
 
 def test_treasure_spells_do_not_replace_basic_lands():
@@ -363,3 +413,16 @@ def test_legacy_replacement_text_suppresses_future_artifact_mana():
     treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token."}
     assert ManaSourceAnalyzer([visitor, treasure]).suppresses_artifact_token_mana
     assert count_fixing([visitor, treasure]) == dict.fromkeys("WUBRG", 0)
+
+
+def test_discard_hand_instant_mana_does_not_fix_spells_from_hand():
+    """Lion's Eye Diamond discards the hand at instant speed, so it cannot pay
+    for a spell from hand; one-shot artifacts without that cost still fix."""
+    led = {"name": "Lion's Eye Diamond", "types": ["Artifact"], "mana_cost": "{0}",
+           "oracle_text": "Discard your hand, Sacrifice this artifact: Add three mana "
+                          "of any one color. Activate only as an instant."}
+    lotus = {"name": "Black Lotus", "types": ["Artifact"], "mana_cost": "{0}",
+             "oracle_text": "{T}, Sacrifice this artifact: Add three mana of any one color."}
+    assert ManaSourceAnalyzer([led]).any_color_sources == 0
+    assert count_fixing([led]) == {c: 0 for c in "WUBRG"}
+    assert ManaSourceAnalyzer([lotus]).any_color_sources == 1

@@ -241,6 +241,31 @@ def test_on_event_change_updates_group_dropdown(root, mock_app_context):
 
 
 @patch("src.ui.top_bar.write_configuration")
+def test_refresh_keeps_the_freshly_loaded_period(mock_write, root, mock_app_context):
+    """A download activates a new period's file; refreshing the controls must
+    select its group instead of reloading the previously selected period."""
+    top_bar = TopBarControls(root, mock_app_context)
+    mock_app_context._initialized = True
+    mock_app_context.vars["selected_event"].set("PremierDraft")
+    mock_app_context.vars["selected_group"].set("All (All Time)")
+    mock_app_context.current_set_data_map = {"PremierDraft": {
+        "All (All Time)": "/sets/CUBE_PremierDraft_All_Custom-AllTime_Data.json",
+        "All (Latest Event + All Time)": "/sets/CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json",
+    }}
+    mock_app_context.configuration.card_data.latest_dataset = (
+        "CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json"
+    )
+
+    top_bar.on_event_change()
+
+    assert mock_app_context.vars["selected_group"].get() == "All (Latest Event + All Time)"
+    mock_app_context.orchestrator.scanner.retrieve_set_data.assert_not_called()
+    assert mock_app_context.configuration.card_data.latest_dataset == (
+        "CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json"
+    )
+
+
+@patch("src.ui.top_bar.write_configuration")
 @patch("src.ui.top_bar.os.path.basename", return_value="path.json")
 def test_on_group_change_loads_dataset(
     mock_basename, mock_write, root, mock_app_context
@@ -267,3 +292,46 @@ def test_on_group_change_loads_dataset(
 
     # 3. Math engines and UI should be refreshed
     mock_app_context.orchestrator.request_math_update.assert_called_once()
+
+
+def test_update_auto_detect_label(root, mock_app_context):
+    """The top-bar label names what Auto resolved to, and clears otherwise."""
+    top_bar = TopBarControls(root, mock_app_context)
+    settings = mock_app_context.configuration.settings
+    settings.filter_format = constants.DECK_FILTER_FORMAT_NAMES
+    mock_app_context.orchestrator.scanner.set_data.get_color_ratings.return_value = {
+        "UB": 55.0
+    }
+
+    settings.deck_filter = constants.FILTER_OPTION_AUTO
+    top_bar.update_auto_detect_label([])
+    assert top_bar.lbl_auto_detect.cget("text") == "(Auto: Detecting...)"
+
+    top_bar.update_auto_detect_label(["UB"])
+    assert top_bar.lbl_auto_detect.cget("text") == "(Auto: Dimir 55.0%)"
+
+    settings.deck_filter = "UB"
+    top_bar.update_auto_detect_label(["UB"])
+    assert top_bar.lbl_auto_detect.cget("text") == ""
+
+
+def test_update_deck_filter_options_falls_back_when_saved_key_missing(
+    root, mock_app_context
+):
+    """A saved deck_filter the new dataset lacks resets to Auto."""
+    top_bar = TopBarControls(root, mock_app_context)
+    mock_app_context._loading = False
+    mock_app_context.configuration.settings.deck_filter = "WG"
+    mock_app_context.orchestrator.scanner.retrieve_color_win_rate.return_value = {
+        "Auto": constants.FILTER_OPTION_AUTO,
+        "Dimir (UB)": "UB",
+    }
+
+    top_bar.update_deck_filter_options()
+
+    assert mock_app_context.configuration.settings.deck_filter == "Auto"
+    assert mock_app_context.vars["deck_filter"].get() == "Auto"
+    assert mock_app_context.deck_filter_map == {
+        "Auto": constants.FILTER_OPTION_AUTO,
+        "Dimir (UB)": "UB",
+    }

@@ -32,9 +32,9 @@ def get_resource_dir():
 BASE_DIR = get_base_dir()
 RESOURCE_DIR = get_resource_dir()
 
-APPLICATION_VERSION = "4.24"
-OLD_APPLICATION_VERSION = "4.23"
-PREVIOUS_APPLICATION_VERSION = "0423"
+APPLICATION_VERSION = "4.25"
+OLD_APPLICATION_VERSION = "4.24"
+PREVIOUS_APPLICATION_VERSION = "0424"
 
 FONT_SANS_SERIF = "Arial"
 FONT_MONO_SPACE = "Courier"
@@ -166,6 +166,12 @@ DATA_SET_FIELDS = [
 
 FILTER_OPTION_ALL_DECKS = "All Decks"
 FILTER_OPTION_AUTO = "Auto"
+# Tab-local color selectors use this to defer to the app-wide deck_filter.
+FILTER_OPTION_FOLLOW = "Follow Deck Filter"
+# Auto only switches to a color pair when at least this many distinct cards
+# carry a win rate for it; thinner coverage renders almost every card as '-'.
+# The dropdowns themselves list every pair with a non-zero archetype win rate.
+AUTO_FILTER_MIN_CARDS = 30
 FILTER_OPTION_TIER = "TIER"
 
 FIELD_LABEL_ATA = "ATA: Average Taken At"
@@ -472,15 +478,29 @@ TIME_PERIOD_OPTIONS = {
     "Last Day": "LAST_DAY",
     "First Week": "FIRST_WEEK",
     "All Except First Week": "ALL_EXCEPT_FIRST_WEEK",
+    "Latest Event + All Time": "LATEST_WITH_ALL_TIME",
 }
 TIME_PERIOD_LABELS = list(TIME_PERIOD_OPTIONS.keys())
 TIME_PERIOD_DEFAULT_LABEL = "All Time"
 TIME_PERIOD_DEFAULT = "ALL_TIME"
 
+# Local presets that 17Lands does not offer: (primary, fallback) queries.
+# LATEST_WITH_ALL_TIME keeps the latest event's card list and fills the win
+# rates 17Lands withholds below 500 games in hand from all-time data. A new
+# cube edition otherwise starts with almost no published GIH WR, while
+# all-time data alone includes cards removed from the cube.
+TIME_PERIOD_SOURCES = {"LATEST_WITH_ALL_TIME": ("LATEST_EVENT", "ALL_TIME")}
+TIME_PERIOD_CUBE_DEFAULT = "LATEST_WITH_ALL_TIME"
+
 
 def time_period_value(label: str) -> str:
     """UI label -> 17Lands query value, falling back to All Time."""
     return TIME_PERIOD_OPTIONS.get(label, TIME_PERIOD_DEFAULT)
+
+
+def default_time_period(set_code: str) -> str:
+    """Cube lists change between editions; other sets default to All Time."""
+    return TIME_PERIOD_CUBE_DEFAULT if "Cube" in str(set_code) else TIME_PERIOD_DEFAULT
 
 
 def time_period_label(value: str) -> str:

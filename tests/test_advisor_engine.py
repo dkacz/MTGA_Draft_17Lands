@@ -40,6 +40,26 @@ def test_all_archetype_keys_are_canonical(mock_metrics, pair):
     assert advisor.main_archetype == normalize_color_string(pair)
 
 
+@pytest.mark.parametrize(
+    "first,second,expected",
+    [("B", "U", "UB"), ("U", "B", "UB"), ("G", "W", "WG"), ("R", "G", "RG")],
+)
+def test_main_archetype_uses_wubrg_key(mock_metrics, first, second, expected):
+    """main_archetype is used to look up deck_colors stats, whose keys are
+    WUBRG-ordered; it must not be alphabetically sorted (issue #203)."""
+    pool = [
+        {"colors": [first], "deck_colors": {"All Decks": {"gihwr": 62.0}}}
+        for _ in range(4)
+    ] + [
+        {"colors": [second], "deck_colors": {"All Decks": {"gihwr": 60.0}}}
+        for _ in range(3)
+    ]
+    advisor = DraftAdvisor(mock_metrics, pool)
+
+    assert set(advisor.main_colors[:2]) == {first, second}
+    assert advisor.main_archetype == expected
+
+
 def test_missing_published_stat_keeps_zero_despite_samples_and_roles(mock_metrics):
     advisor = DraftAdvisor(mock_metrics, [card(wr=60) for _ in range(20)])
     candidate = card("Unknown bomb", wr=0, samples=469, tags=["removal", "evasion"])

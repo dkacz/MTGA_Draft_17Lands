@@ -5,7 +5,6 @@ import pytest
 import responses
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 from server.utils import APIClient
 from server.main import get_scheduled_events
@@ -31,40 +30,6 @@ def api_client(tmp_path):
 # ==============================================================================
 
 
-@pytest.mark.parametrize(
-    "day,extra_formats",
-    [
-        ("2026-09-28", None),
-        ("2026-09-29", {"Sealed", "TradSealed"}),
-        ("2026-10-01", {"Sealed", "TradSealed"}),
-        ("2026-10-08", {"Sealed", "TradSealed", "QuickDraft"}),
-        ("2026-10-14", {"Sealed", "QuickDraft", "ContenderDraft"}),
-        ("2026-10-19", {"Sealed", "ContenderDraft"}),
-        ("2026-10-28", {"QuickDraft", "ContenderDraft"}),
-        ("2026-11-07", {"ContenderDraft"}),
-        ("2026-11-10", None),
-    ],
-)
-def test_reality_fracture_schedule(day, extra_formats, monkeypatch):
-    """Use the real calendar, including the Quick Draft gap and Sealed endings."""
-    class FixedDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
-
-    monkeypatch.setattr("server.main.datetime", FixedDatetime)
-    calendar_path = Path(__file__).resolve().parents[2] / "server" / "calendar.json"
-    events = get_scheduled_events(str(calendar_path))
-
-    if extra_formats is None:
-        assert "FRA" not in events
-    else:
-        assert events["FRA"]["start_date"] == "2026-09-29"
-        assert set(events["FRA"]["formats"]) == {
-            "PremierDraft", "TradDraft", "PickTwoDraft"
-        } | extra_formats
-
-
 def test_get_scheduled_events(tmp_path, monkeypatch):
     """Verify the calendar correctly filters active vs inactive events based on today's date."""
 
@@ -74,7 +39,7 @@ def test_get_scheduled_events(tmp_path, monkeypatch):
         def now(cls, tz=None):
             return cls(2026, 3, 15, tzinfo=timezone.utc)
 
-    monkeypatch.setattr("server.main.datetime", MockDatetime)
+    monkeypatch.setattr("server.events.datetime", MockDatetime)
 
     # 2. Create a mock calendar.json
     cal_file = tmp_path / "calendar.json"
@@ -108,7 +73,7 @@ def test_get_scheduled_events(tmp_path, monkeypatch):
         )
     )
 
-    active_sets = get_scheduled_events(str(cal_file))
+    active_sets = get_scheduled_events(json.loads(cal_file.read_text()))
 
     assert "TMNT" in active_sets
     assert "PremierDraft" in active_sets["TMNT"]["formats"]

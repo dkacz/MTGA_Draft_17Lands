@@ -35,8 +35,17 @@ def sample_count(stats):
         return 0
 
 
+# Games in hand at which 17Lands first publishes a GIH WR. A win rate filled
+# from another period (stats["period"] set by the mixed time period) counts as
+# at most this many games: its own count measures the old card pool, not how
+# well the rate carries over to a changed one. Current ratings are unchanged.
+FALLBACK_SAMPLE_CAP = 500
+
+
 def sample_weight(stats):
     samples = sample_count(stats)
+    if stats.get("period"):
+        samples = min(samples, FALLBACK_SAMPLE_CAP)
     return samples / (samples + SAMPLE_PRIOR)
 
 

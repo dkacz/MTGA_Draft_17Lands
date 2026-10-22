@@ -17,7 +17,7 @@ from src.advisor.card_quality import (
 )
 from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
 from src.advisor.schema import Recommendation
-from src.card_logic import get_functional_cmc
+from src.card_utils import get_functional_cmc
 from src.utils import normalize_color_string
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,9 @@ class DraftAdvisor:
                     reasons = ["No published GIHWR"]
                 else:
                     final = max(0.0, base + max(-10.0, min(10.0, role_bonus + scarcity))) * cast_fit
-                    if 0 < samples < 500:
+                    if stats_for(card).get("period"):
+                        reasons.append("GIH WR from all-time data")
+                    elif 0 < samples < 500:
                         reasons.append(f"Small GIH sample ({samples})")
                     elif samples == 0:
                         reasons.append("GIH sample size unavailable")

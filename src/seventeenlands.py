@@ -8,9 +8,11 @@ import time
 import os
 import json
 import logging
+import tempfile
+import math
 from typing import List, Dict, Any, Optional
 from src.utils import is_cache_stale, normalize_color_string, sanitize_card_name
-from src.constants import BASE_DIR
+from src.constants import BASE_DIR, TIME_PERIOD_SOURCES, time_period_label
 
 logger = logging.getLogger(__name__)
 
@@ -22,20 +24,58 @@ class Seventeenlands:
     }
     CACHE_DIR = os.path.join(BASE_DIR, "Temp", "RawCache")
     ARCHETYPES = ["All", "WU", "UB", "BR", "RG", "WG", "WB", "UR", "BG", "WR", "UG"]
+    # Win-rate fields copied from one period together, so that a fallback GIH WR
+    # keeps its own sample count and companion rates.
+    WIN_RATE_FIELDS = ("gihwr", "ohwr", "gpwr", "gnswr", "gdwr", "iwd", "samples")
 
     def __init__(self):
+        # All Decks rating origin of the last mixed-period download, else None.
+        self.rating_sources = None
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
-        if not os.path.exists(self.CACHE_DIR):
-            os.makedirs(self.CACHE_DIR)
+        try:
+            os.makedirs(self.CACHE_DIR, exist_ok=True)
+        except OSError as error:
+            logger.warning("Could not create 17Lands cache directory: %s", error)
 
     @staticmethod
     def _unwrap_card_payload(payload) -> List[Dict]:
         """/api/card_data wraps the card list in {copyright, notes, data};
         older responses/caches are a bare list. Accept both."""
         if isinstance(payload, dict):
-            return payload.get("data") or []
-        return payload or []
+            payload = payload.get("data")
+        if not isinstance(payload, list) or any(
+            not isinstance(card, dict) for card in payload
+        ):
+            raise ValueError("Invalid 17Lands card data: expected a list of card objects")
+        # Validate every row before caching or mutating a caller's ratings.
+        # Missing/null statistics are legitimate for cards with few games.
+        numeric_fields = (
+            "ever_drawn_win_rate", "opening_hand_win_rate", "win_rate",
+            "never_drawn_win_rate", "drawn_win_rate", "avg_seen", "avg_pick",
+            "drawn_improvement_win_rate", "ever_drawn_game_count", "drawn_game_count",
+        )
+        for card in payload:
+            if not isinstance(card.get("name"), str) or not card["name"].strip():
+                raise ValueError("Invalid 17Lands card data: missing card name")
+            for field in ("url", "url_back"):
+                if card.get(field) is not None and not isinstance(card[field], str):
+                    raise ValueError(f"Invalid 17Lands card data: {field} must be text")
+            for field in numeric_fields:
+                value = card.get(field)
+                if value is None:
+                    continue
+                try:
+                    number = float(value)
+                    valid = not isinstance(value, bool) and math.isfinite(number)
+                    if field.endswith("game_count"):
+                        valid = valid and number >= 0 and number.is_integer()
+                        int(value)  # Must also support the consumer's integer conversion.
+                except (ValueError, TypeError, OverflowError):
+                    valid = False
+                if not valid:
+                    raise ValueError(f"Invalid 17Lands card data: invalid {field}")
+        return payload
 
     def download_set_data(
         self,
@@ -49,6 +89,12 @@ class Seventeenlands:
         """
         Builds a full multi-archetype dataset.
         """
+        sources = TIME_PERIOD_SOURCES.get(time_period)
+        if sources:
+            return self._download_with_fallback(
+                set_code, draft_format, sources, colors, user_group, progress_callback
+            )
+
         master_card_map = {}
         target_colors = colors if colors else self.ARCHETYPES
 
@@ -91,6 +137,51 @@ class Seventeenlands:
 
         return master_card_map
 
+    def _download_with_fallback(
+        self, set_code, draft_format, sources, colors, user_group, progress_callback
+    ):
+        """Keep the primary period's card list and fill each archetype's
+        withheld win rates from the fallback period."""
+
+        def half(offset):
+            if not progress_callback:
+                return None
+            return lambda msg, pct: progress_callback(msg, offset + pct // 2)
+
+        primary = self.download_set_data(
+            set_code, draft_format, sources[0], colors, user_group, half(0)
+        )
+        if not primary:
+            # The card list must come from the primary period; falling back
+            # to the other period's list would bring back removed cards.
+            raise ValueError(
+                f"17Lands has no {time_period_label(sources[0])} card data for "
+                f"{set_code} {draft_format}. Choose another time period."
+            )
+        fallback = self.download_set_data(
+            set_code, draft_format, sources[1], colors, user_group, half(50)
+        )
+
+        counts = {"primary": 0, "fallback": 0, "missing": 0}
+        for name, card in primary.items():
+            had_rating = bool(card["deck_colors"].get("All Decks", {}).get("gihwr"))
+            for key, old in fallback.get(name, {}).get("deck_colors", {}).items():
+                if not old.get("gihwr"):
+                    continue
+                # A row missing from the primary period gets no pick order.
+                stats = card["deck_colors"].setdefault(key, {"alsa": 0.0, "ata": 0.0})
+                if not stats.get("gihwr"):
+                    stats.update({f: old.get(f, 0) for f in self.WIN_RATE_FIELDS})
+                    stats["period"] = sources[1]
+            if had_rating:
+                counts["primary"] += 1
+            elif card["deck_colors"].get("All Decks", {}).get("gihwr"):
+                counts["fallback"] += 1
+            else:
+                counts["missing"] += 1
+        self.rating_sources = counts
+        return primary
+
     def _fetch_archetype_with_cache(
         self,
         set_code: str,
@@ -110,16 +201,16 @@ class Seventeenlands:
 
         cache_path = os.path.join(self.CACHE_DIR, cache_name)
 
-        if not is_cache_stale(cache_path, hours=12):
-            try:
-                with open(cache_path, "r") as f:
-                    cached_data = json.load(f)
+        try:
+            if not is_cache_stale(cache_path, hours=12):
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cached_data = self._unwrap_card_payload(json.load(f))
                     # Do not use cache if it's an empty array (meaning 17Lands had no data yesterday)
                     if cached_data and len(cached_data) > 0:
                         logger.info(f"Using cached 17Lands data for {cache_name}")
                         return cached_data, True
-            except json.JSONDecodeError:
-                pass  # Cache corrupt, fetch new
+        except (OSError, ValueError) as error:
+            logger.warning("Ignoring unusable 17Lands cache %s: %s", cache_name, error)
 
         # Build URL. Card ratings live at /api/card_data with an `event_type`
         # param and a time_period preset (ALL_TIME, LATEST_EVENT, ...). The old
@@ -146,12 +237,20 @@ class Seventeenlands:
 
         # Only save to cache if we actually received data
         if data and len(data) > 0:
-            import tempfile
-
-            fd, temp_path = tempfile.mkstemp(dir=self.CACHE_DIR)
-            with os.fdopen(fd, "w") as f:
-                json.dump(data, f)
-            os.replace(temp_path, cache_path)
+            temp_path = None
+            try:
+                fd, temp_path = tempfile.mkstemp(dir=self.CACHE_DIR)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+                os.replace(temp_path, cache_path)
+            except OSError as error:
+                logger.warning("Could not save 17Lands cache %s: %s", cache_name, error)
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError as error:
+                        logger.warning("Could not remove temporary cache file: %s", error)
 
         return data, False
 
@@ -237,7 +336,8 @@ class Seventeenlands:
         params = {
             "expansion": set_code,
             "event_type": draft,
-            "time_period": time_period,
+            # Archetype win rates and game counts describe the primary period.
+            "time_period": TIME_PERIOD_SOURCES.get(time_period, (time_period,))[0],
             "combine_splash": True,
         }
         if user_group and user_group.lower() != "all":
@@ -266,9 +366,16 @@ class Seventeenlands:
         game_count = 0
         for entry in data:
             if entry.get("is_summary"):
+                # Summaries cover all decks or a color count ("Mono-color",
+                # short_name 1, 2, 3). Only the all-decks row is an archetype.
+                if entry.get("short_name") != "All" and "All Decks" not in str(
+                    entry.get("color_name", "")
+                ):
+                    continue
                 game_count = entry.get("games", 0)
-
-            color_key = entry.get("short_name")
+                color_key = "All Decks"
+            else:
+                color_key = entry.get("short_name")
             if not color_key:
                 color_name = entry.get("color_name", "")
                 if "All Decks" in color_name:

@@ -59,7 +59,8 @@ def test_refresh_replaces_previous_day_and_invalidates_metadata_cache(
     card["deck_colors"]["All Decks"]["gihwr"] = 60.2
     assert extractor.export_card_data() == filename
 
-    assert [f.name for f in tmp_path.iterdir()] == [filename]
+    datasets = [f.name for f in tmp_path.iterdir() if f.name.endswith(constants.SET_FILE_SUFFIX)]
+    assert datasets == [filename]
     new_files, errors = utils.retrieve_local_set_list()
     assert not errors
     assert new_files[0][4] == "2026-10-02"
