@@ -50,11 +50,13 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
     any_color_enabler_pips = analyzer.any_color_enabler_pips
 
     for card in spells:
+        copies = card.get("count", 1)
         cost = get_main_mana_cost(card)
         cmc = int(get_main_cmc(card) or 99)
 
         if cost:
             card_color_pips = {c: 0 for c in constants.CARD_COLORS}
+            card_hybrid_pips = []
             for opts in get_color_requirements(card):
                 valid_opts = [
                     opt
@@ -67,11 +69,12 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
                 if len(valid_opts) == 1:
                     card_color_pips[valid_opts[0]] += 1
                 elif len(valid_opts) > 1:
-                    hybrid_pips.append((valid_opts, cmc))
+                    card_hybrid_pips.append((valid_opts, cmc))
 
+            hybrid_pips.extend(card_hybrid_pips * copies)
             for c, count in card_color_pips.items():
                 if count > 0:
-                    strict_pips[c] += count
+                    strict_pips[c] += count * copies
                     if count > max_pip_in_single_card[c]:
                         max_pip_in_single_card[c] = count
                     if cmc < lowest_cmc[c]:
@@ -79,7 +82,7 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
         else:
             for c in get_main_colors(card):
                 if c in colors:
-                    strict_pips[c] += 1
+                    strict_pips[c] += copies
                     max_pip_in_single_card[c] = max(1, max_pip_in_single_card[c])
                     lowest_cmc[c] = min(cmc, lowest_cmc[c])
 

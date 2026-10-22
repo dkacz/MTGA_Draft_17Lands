@@ -17,7 +17,7 @@ from src.advisor.card_quality import (
 )
 from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
 from src.advisor.schema import Recommendation
-from src.card_logic import get_functional_cmc
+from src.card_utils import get_functional_cmc
 from src.utils import normalize_color_string
 
 logger = logging.getLogger(__name__)

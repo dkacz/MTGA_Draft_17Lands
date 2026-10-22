@@ -4,7 +4,7 @@ Evaluates pool strength, calculates holistic power scores, and identifies top la
 """
 
 from src import constants
-from src.card_logic import get_functional_cmc
+from src.card_utils import get_functional_cmc
 from src.advisor.mana_base import ManaSourceAnalyzer
 from src.advisor.card_features import get_main_types, get_main_text, get_mana_colors
 from src.advisor.card_quality import blended_win_rate

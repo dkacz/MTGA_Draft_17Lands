@@ -186,3 +186,14 @@ def test_format_texture_counts_unique_names_not_arena_variants():
     texture = SetMetrics(ds).format_texture["U"]
     assert texture["2-drop"] == 1
     assert texture["removal"] == 1
+
+
+def test_sample_count_tracks_cards_with_data(otj_premier, missing_set):
+    """get_sample_count exposes how many distinct cards fed a color/field mean,
+    so callers can tell a real archetype mean from one built on a handful."""
+    all_decks = otj_premier.get_sample_count("All Decks", DATA_FIELD_GIHWR)
+    pair = otj_premier.get_sample_count("WU", DATA_FIELD_GIHWR)
+    assert all_decks > 100
+    assert 0 < pair <= all_decks
+    assert missing_set.get_sample_count("WU", DATA_FIELD_GIHWR) == 0
+    assert otj_premier.get_sample_count("WU", "not-a-field") == 0

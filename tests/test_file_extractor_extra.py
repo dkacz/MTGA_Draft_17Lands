@@ -1,4 +1,5 @@
 import pytest
+import json
 from unittest.mock import MagicMock, patch
 from src.file_extractor import FileExtractor
 from src.utils import Result
@@ -145,6 +146,39 @@ def test_export_card_data(mock_invalidate, tmp_path, monkeypatch):
     mock_invalidate.assert_called_once()
 
 
+@pytest.mark.parametrize("failure", ["validation", "serialization", "replace", "write"])
+def test_failed_export_preserves_previous_dataset(failure, tmp_path, monkeypatch):
+    monkeypatch.setattr("src.constants.SETS_FOLDER", str(tmp_path))
+    extractor = FileExtractor(None, MagicMock(), MagicMock(), MagicMock())
+    extractor.selected_sets = MagicMock(seventeenlands=["OTJ"])
+    extractor.draft = "PremierDraft"
+    extractor.user_group = "All"
+    extractor.time_period = "ALL_TIME"
+    extractor.end_date = "2024-02-01"
+    extractor.combined_data = {
+        "meta": {"version": 3},
+        "card_ratings": {str(i): {"name": f"Card {i}"} for i in range(10)},
+    }
+    destination = tmp_path / "OTJ_PremierDraft_All_Custom-AllTime-20240201_Data.json"
+    destination.write_bytes(b"previous dataset")
+    if failure == "validation":
+        extractor.combined_data["card_ratings"] = {}
+    elif failure == "serialization":
+        extractor.combined_data["invalid"] = float("nan")
+    elif failure == "replace":
+        monkeypatch.setattr("src.file_extractor.os.replace", MagicMock(side_effect=PermissionError))
+    else:
+        def fail_write(data, file, **kwargs):
+            file.write('{"partial":')
+            raise OSError("Disk full")
+        monkeypatch.setattr("src.file_extractor.json.dump", fail_write)
+    with patch("src.utils.invalidate_local_set_cache") as invalidate:
+        assert extractor.export_card_data() == ""
+        invalidate.assert_not_called()
+    assert destination.read_bytes() == b"previous dataset"
+    assert list(tmp_path.iterdir()) == [destination]
+
+
 @patch(
     "src.file_extractor.FileExtractor._retrieve_local_arena_data",
     return_value=(False, "Failed", 0),
@@ -279,6 +313,8 @@ def test_download_card_data_api_failure_graceful_fallback(mock_17l, mock_local_d
     # We must patch export so it doesn't try to write to a real directory
     with patch(
         "src.file_extractor.FileExtractor.export_card_data", return_value="output.json"
+    ), patch(
+        "src.file_extractor.FileExtractor._inject_community_tags", return_value=[]
     ):
         success, msg, size = extractor.download_card_data(0)
 

@@ -1667,7 +1667,7 @@ class FileExtractor(UIProgress):
                 delete=False,
             ) as file:
                 temporary_path = file.name
-                json.dump(self.combined_data, file)
+                json.dump(self.combined_data, file, allow_nan=False)
 
             if check_file_integrity(temporary_path)[0] != Result.VALID:
                 return ""

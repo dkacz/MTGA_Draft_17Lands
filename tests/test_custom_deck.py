@@ -7,6 +7,37 @@ from src.configuration import Configuration
 from src.ui.styles import Theme
 
 
+@pytest.mark.parametrize("nonbasic_count, expected_basics", [(0, 17), (3, 14), (20, 0)])
+def test_auto_lands_counts_stacked_copies(nonbasic_count, expected_basics):
+    from types import SimpleNamespace
+
+    spells = [
+        {"name": f"Spell {i}", "count": 2 if i < 3 else 1,
+         "types": ["Creature"], "colors": ["G"], "mana_cost": "{1}{G}", "cmc": 2}
+        for i in range(20)
+    ]
+    lands = ([{"name": "Nonbasic", "types": ["Land"], "count": nonbasic_count}]
+             if nonbasic_count else [])
+    panel = SimpleNamespace(
+        deck_list=spells + lands,
+        after=lambda delay, callback: callback(),
+        _show_sim_loading=MagicMock(), _show_sim_error=MagicMock(),
+        _update_tables=MagicMock(), _render_deck_stats=MagicMock(),
+        _update_basics_toolbar=MagicMock(), _run_monte_carlo_task=MagicMock(),
+    )
+
+    def make_basics(*args, forced_count):
+        return [{"name": "Forest", "types": ["Land", "Basic"], "count": 1}
+                for _ in range(forced_count)]
+
+    with patch("src.advisor.mana_base.brute_force_mana_base", side_effect=make_basics) as optimize:
+        CustomDeckPanel._run_auto_lands_task(panel)
+
+    panel._show_sim_error.assert_not_called()
+    assert optimize.call_args.kwargs["forced_count"] == expected_basics
+    assert sum(c.get("count", 1) for c in panel.deck_list) == 40
+
+
 class TestCustomDeckPanel:
     @pytest.fixture
     def root(self):
@@ -34,6 +65,28 @@ class TestCustomDeckPanel:
             if isinstance(w, ttk.Label)
         ]
         assert any("Deck must have 40 cards to analyze" in text for text in labels)
+
+    @pytest.mark.parametrize(
+        "strict_colors,expected_key",
+        [(["U", "W"], "WU"), (["G", "U"], "UG"), (["R", "W", "B"], "WR")],
+    )
+    def test_auto_optimize_passes_wubrg_archetype_key(
+        self, root, strict_colors, expected_key
+    ):
+        """The optimizer looks up deck_colors[archetype_key]; the key must be
+        WUBRG-ordered like the dataset, not alphabetical (issue #203)."""
+        panel = CustomDeckPanel(root, MagicMock(), Configuration(), MagicMock())
+        panel.deck_list = [{"name": "Spell", "count": 40, "types": ["Creature"]}]
+        panel.sb_list = []
+
+        with patch(
+            "src.card_logic.get_strict_colors", return_value=strict_colors
+        ), patch(
+            "src.card_logic.optimize_deck", return_value=(None, None, None, "")
+        ) as mock_opt:
+            panel._run_auto_optimize_task()
+
+        assert mock_opt.call_args[0][2] == expected_key
 
     def test_auto_lands_empty_spells(self, root):
         """Verify Auto-lands does not divide by zero if deck has 0 spells."""

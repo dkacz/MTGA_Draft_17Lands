@@ -7,7 +7,7 @@ import copy
 import logging
 import itertools
 from src import constants
-from src.card_logic import get_functional_cmc, stack_cards
+from src.card_utils import get_functional_cmc, stack_cards
 from src.advisor.card_features import (
     get_color_requirements,
     get_main_types,

@@ -30,7 +30,7 @@ from src.card_logic import (
 )
 from src.ui.styles import Theme
 from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
-from src.utils import bind_scroll
+from src.utils import bind_scroll, normalize_color_string
 
 
 class CustomDeckPanel(ttk.Frame):
@@ -480,7 +480,9 @@ class CustomDeckPanel(ttk.Frame):
             spells = [c for c in base_deck if "Land" not in c.get("types", [])]
             deck_colors = get_strict_colors(spells)
             archetype_key = (
-                "".join(sorted(deck_colors[:2])) if deck_colors else "All Decks"
+                normalize_color_string("".join(deck_colors[:2]))
+                if deck_colors
+                else "All Decks"
             )
 
             final_deck, final_sb, final_stats, opt_note = optimize_deck(
@@ -512,13 +514,16 @@ class CustomDeckPanel(ttk.Frame):
             else:
                 raise Exception("Failed to optimize.")
         except Exception as e:
+            # Bind the message now: `e` is unbound once the except block exits,
+            # before Tk runs the callback.
+            err_msg = str(e)
 
             def show_err():
-                self._show_sim_error(str(e))
+                self._show_sim_error(err_msg)
                 import tkinter.messagebox
 
                 tkinter.messagebox.showwarning(
-                    "Optimization Failed", str(e), parent=self
+                    "Optimization Failed", err_msg, parent=self
                 )
 
             self.after(0, show_err)
@@ -1183,19 +1188,28 @@ class CustomDeckPanel(ttk.Frame):
             if not deck_colors:
                 deck_colors = ["W", "U", "B", "R", "G"]
 
-            total_lands_needed = 40 - len(spells)
+            total_lands_needed = max(0, 40 - sum(c.get("count", 1) for c in spells))
 
             # Trim excess non-basics if needed
-            if len(non_basic_lands) > total_lands_needed:
+            if sum(c.get("count", 1) for c in non_basic_lands) > total_lands_needed:
                 non_basic_lands.sort(
                     key=lambda x: float(
                         x.get("deck_colors", {}).get("All Decks", {}).get("gihwr", 0.0)
                     ),
                     reverse=True,
                 )
-                non_basic_lands = non_basic_lands[:total_lands_needed]
+                trimmed_lands = []
+                remaining = total_lands_needed
+                for card in non_basic_lands:
+                    count = min(card.get("count", 1), remaining)
+                    if count > 0:
+                        trimmed_lands.append(dict(card, count=count))
+                        remaining -= count
+                non_basic_lands = trimmed_lands
 
-            needed_basics = max(0, total_lands_needed - len(non_basic_lands))
+            needed_basics = max(
+                0, total_lands_needed - sum(c.get("count", 1) for c in non_basic_lands)
+            )
 
             # Trigger the AI brute force
             basics_to_add = brute_force_mana_base(
@@ -1204,9 +1218,7 @@ class CustomDeckPanel(ttk.Frame):
 
             def _finalize():
                 # Wipe old basics
-                self.deck_list = [
-                    c for c in self.deck_list if c["name"] not in constants.BASIC_LANDS
-                ]
+                self.deck_list = spells + non_basic_lands
 
                 # Append the optimal ones
                 for basic in basics_to_add:
