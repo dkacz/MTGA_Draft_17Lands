@@ -701,7 +701,9 @@ class FileExtractor(UIProgress):
                 return False, f"Network Error: {str(e)}", 0
 
         # 3. Assemble the final dataset
-        matched_count, total_17lands_count = self._assemble_deep_set(deep_ratings)
+        matched_count, total_17lands_count, unmatched_names = self._assemble_deep_set(
+            deep_ratings
+        )
 
         # Backfill game_count if needed
         if self.combined_data["meta"].get("game_count", 0) == 0:
@@ -754,6 +756,22 @@ class FileExtractor(UIProgress):
             f"Archetypes Downloaded: {archetypes_found}\n"
             f"Cards with Scryfall Tags: {tag_status}\n\n"
         )
+
+        if sl.rating_sources:
+            stats_msg += (
+                f"GIH WR from the latest event: {sl.rating_sources['primary']} cards, "
+                f"from all-time data: {sl.rating_sources['fallback']}, "
+                f"not yet published: {sl.rating_sources['missing']}.\n"
+            )
+
+        if matched_count and unmatched_names:
+            examples = ", ".join(unmatched_names[:5])
+            more = f" and {len(unmatched_names) - 5} more" if len(unmatched_names) > 5 else ""
+            stats_msg += (
+                f"\n\n⚠️ WARNING: {len(unmatched_names)} cards rated by 17Lands are missing from "
+                f"the local MTGA card database ({examples}{more}). Launch Magic Arena to download "
+                "the latest game files, then download this dataset again."
+            )
 
         if matched_count == 0:
             stats_msg += "\n\n⚠️ WARNING: 0 cards matched! Please launch Magic Arena to ensure the latest game files are downloaded, then try again."
@@ -833,7 +851,8 @@ class FileExtractor(UIProgress):
                 initialize_card_data(local_card)
                 self.combined_data["card_ratings"][arena_id] = local_card
 
-        return len(matched_names), len(deep_ratings)
+        unmatched_names = sorted(set(deep_ratings) - matched_names)
+        return len(matched_names), len(deep_ratings), unmatched_names
 
     def _download_expansion(self, database_size):
         """Function that performs the following steps:

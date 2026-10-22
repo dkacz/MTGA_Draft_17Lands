@@ -12,7 +12,7 @@ import tempfile
 import math
 from typing import List, Dict, Any, Optional
 from src.utils import is_cache_stale, normalize_color_string, sanitize_card_name
-from src.constants import BASE_DIR
+from src.constants import BASE_DIR, TIME_PERIOD_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,13 @@ class Seventeenlands:
     }
     CACHE_DIR = os.path.join(BASE_DIR, "Temp", "RawCache")
     ARCHETYPES = ["All", "WU", "UB", "BR", "RG", "WG", "WB", "UR", "BG", "WR", "UG"]
+    # Win-rate fields copied from one period together, so that a fallback GIH WR
+    # keeps its own sample count and companion rates.
+    WIN_RATE_FIELDS = ("gihwr", "ohwr", "gpwr", "gnswr", "gdwr", "iwd", "samples")
 
     def __init__(self):
+        # All Decks rating origin of the last mixed-period download, else None.
+        self.rating_sources = None
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
         try:
@@ -84,6 +89,12 @@ class Seventeenlands:
         """
         Builds a full multi-archetype dataset.
         """
+        sources = TIME_PERIOD_SOURCES.get(time_period)
+        if sources:
+            return self._download_with_fallback(
+                set_code, draft_format, sources, colors, user_group, progress_callback
+            )
+
         master_card_map = {}
         target_colors = colors if colors else self.ARCHETYPES
 
@@ -125,6 +136,42 @@ class Seventeenlands:
             progress_callback("Finalizing Dataset...", 100)
 
         return master_card_map
+
+    def _download_with_fallback(
+        self, set_code, draft_format, sources, colors, user_group, progress_callback
+    ):
+        """Keep the primary period's card list and fill each archetype's
+        withheld win rates from the fallback period."""
+
+        def half(offset):
+            if not progress_callback:
+                return None
+            return lambda msg, pct: progress_callback(msg, offset + pct // 2)
+
+        primary = self.download_set_data(
+            set_code, draft_format, sources[0], colors, user_group, half(0)
+        )
+        fallback = self.download_set_data(
+            set_code, draft_format, sources[1], colors, user_group, half(50)
+        )
+        if not primary:
+            return fallback
+
+        counts = {"primary": 0, "fallback": 0, "missing": 0}
+        for name, card in primary.items():
+            had_rating = bool(card["deck_colors"].get("All Decks", {}).get("gihwr"))
+            for key, old in fallback.get(name, {}).get("deck_colors", {}).items():
+                stats = card["deck_colors"].setdefault(key, dict(old))
+                if not stats.get("gihwr") and old.get("gihwr"):
+                    stats.update({f: old.get(f, 0) for f in self.WIN_RATE_FIELDS})
+            if had_rating:
+                counts["primary"] += 1
+            elif card["deck_colors"].get("All Decks", {}).get("gihwr"):
+                counts["fallback"] += 1
+            else:
+                counts["missing"] += 1
+        self.rating_sources = counts
+        return primary
 
     def _fetch_archetype_with_cache(
         self,
@@ -280,7 +327,8 @@ class Seventeenlands:
         params = {
             "expansion": set_code,
             "event_type": draft,
-            "time_period": time_period,
+            # Archetype win rates and game counts describe the primary period.
+            "time_period": TIME_PERIOD_SOURCES.get(time_period, (time_period,))[0],
             "combine_splash": True,
         }
         if user_group and user_group.lower() != "all":

@@ -24,7 +24,8 @@ class DatasetArgs:
     user_group: str
     game_count: int
     color_ratings: Optional[dict] = None
-    time_period: str = constants.TIME_PERIOD_DEFAULT
+    # Empty keeps the selected set's default period (see _on_set_change).
+    time_period: str = ""
 
 
 class DownloadWindow(ttk.Frame):
@@ -483,7 +484,8 @@ class DownloadWindow(ttk.Frame):
             self.vars["group"].set(args.user_group)
             self.vars["start"].set(args.start)
             self.vars["end"].set(args.end)
-            self.vars["period"].set(constants.time_period_label(args.time_period))
+            if args.time_period:
+                self.vars["period"].set(constants.time_period_label(args.time_period))
             self.update_idletasks()
             self._start_download(args)
 
@@ -545,6 +547,10 @@ class DownloadWindow(ttk.Frame):
         if s_info:
             if s_info.start_date:
                 self.vars["start"].set(s_info.start_date)
+            set_code = s_info.seventeenlands[0] if s_info.seventeenlands else val
+            self.vars["period"].set(
+                constants.time_period_label(constants.default_time_period(set_code))
+            )
             try:
                 menu = self.om_event["menu"]
                 menu.delete(0, "end")
