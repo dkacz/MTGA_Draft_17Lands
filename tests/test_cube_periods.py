@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src import constants
+from src.advisor.card_quality import sample_weight
 from src.file_extractor import FileExtractor
 from src.limited_sets import SetInfo
 from src.seventeenlands import Seventeenlands
@@ -30,7 +31,7 @@ RAW = {
         row("Removed Card", 0.62, 15000, ata=1.5),
     ],
     ("LATEST_EVENT", "WU"): [row("Returning Card", None, 40, ata=2.5)],
-    ("ALL_TIME", "WU"): [row("Returning Card", 0.61, 3000, ata=4.0)],
+    ("ALL_TIME", "WU"): [row("Returning Card", 0.61, 3000, ata=4.0), row("Kept Card", 0.6, 900, ata=7.0)],
 }
 
 
@@ -55,25 +56,41 @@ def test_mixed_period_keeps_latest_cards_and_fills_withheld_win_rates(client):
     assert set(cards) == {"Kept Card", "Returning Card", "Unrated Card"}
     kept = cards["Kept Card"]["deck_colors"]["All Decks"]
     assert (kept["gihwr"], kept["samples"]) == (60.0, 800)
+    assert "period" not in kept
+    # A row the latest event lacks gets win rates only, never old pick order.
+    assert cards["Kept Card"]["deck_colors"]["WU"] == {
+        "alsa": 0.0, "ata": 0.0, "gihwr": 60.0, "ohwr": 0.0, "gpwr": 0.0,
+        "gnswr": 0.0, "gdwr": 0.0, "iwd": 0.0, "samples": 900, "period": "ALL_TIME",
+    }
 
     returning = cards["Returning Card"]["deck_colors"]
     assert (returning["All Decks"]["gihwr"], returning["All Decks"]["samples"]) == (58.0, 20000)
     assert returning["All Decks"]["gpwr"] == 57.0
     # Pick order still describes the current edition.
     assert returning["All Decks"]["ata"] == 2.0
-    assert returning["WU"]["gihwr"] == 61.0
+    assert returning["All Decks"]["period"] == "ALL_TIME"
+    assert (returning["WU"]["gihwr"], returning["WU"]["ata"]) == (61.0, 2.5)
 
     assert cards["Unrated Card"]["deck_colors"]["All Decks"]["gihwr"] == 0.0
     assert client.rating_sources == {"primary": 1, "fallback": 1, "missing": 1}
     assert set(client.calls) == {"LATEST_EVENT", "ALL_TIME"}
 
 
-def test_mixed_period_without_latest_data_uses_all_time(client, monkeypatch):
+def test_mixed_period_without_latest_data_fails(client, monkeypatch):
+    """The card list must come from the latest event, never from all-time data."""
     monkeypatch.setitem(RAW, ("LATEST_EVENT", "All"), [])
-    cards = client.download_set_data("Cube - Powered", "PremierDraft", MIXED, colors=["All"])
-
-    assert "Removed Card" in cards
+    with pytest.raises(ValueError, match="no Latest Event card data"):
+        client.download_set_data("Cube - Powered", "PremierDraft", MIXED, colors=["All"])
+    assert client.calls == ["LATEST_EVENT"]
     assert client.rating_sources is None
+
+
+def test_filled_rates_count_as_at_most_the_publication_threshold():
+    """A historical fill gets no more confidence than the first published
+    current rating (500 games in hand); current ratings keep their weight."""
+    assert sample_weight({"samples": 62967, "period": "ALL_TIME"}) == pytest.approx(500 / 1500)
+    assert sample_weight({"samples": 300, "period": "ALL_TIME"}) == pytest.approx(300 / 1300)
+    assert sample_weight({"samples": 62967}) == pytest.approx(62967 / 63967)
 
 
 def test_single_periods_are_unchanged(client):
@@ -152,5 +169,29 @@ def test_download_reports_rating_sources_and_cards_missing_locally(mock_client, 
 
     assert success
     assert "17Lands Coverage: 1 / 2 cards" in msg
+    assert "Cards with Scryfall Tags: 0 (Skipped for Cube datasets)" in msg
     assert "from the latest event: 1 cards, from all-time data: 0, not yet published: 1" in msg
     assert "1 cards rated by 17Lands are missing from the local MTGA card database (True-Name Nemesis)" in msg
+
+
+def test_cube_selection_defaults_to_a_format_17lands_offers():
+    sets = {"Cube - Powered": SetInfo(
+        arena=["ALL"], seventeenlands=["Cube - Powered"], set_code="CUBE-POWERED",
+        formats=["PremierDraft", "TradDraft", "QuickDraft", "ContenderDraft"],
+    )}
+    panel = panel_for(sets)
+    DownloadWindow._on_set_change(panel, "Cube - Powered")
+    panel.vars["event"].set.assert_called_with("PremierDraft")
+
+
+def test_color_count_summaries_are_not_archetypes(monkeypatch, tmp_path):
+    """17Lands summary rows (All, 1, 2, 3 colors) must not become an empty key."""
+    monkeypatch.setattr(Seventeenlands, "CACHE_DIR", str(tmp_path))
+    rows = [
+        {"short_name": 1, "color_name": "Mono-color", "is_summary": True, "games": 890, "wins": 450},
+        {"short_name": "WU", "color_name": "Azorius (WU)", "is_summary": False, "games": 1036, "wins": 560},
+        {"short_name": "All", "color_name": "All Decks", "is_summary": True, "games": 14883, "wins": 7442},
+    ]
+    ratings, games = Seventeenlands()._process_color_ratings(rows, None, threshold=500)
+    assert ratings == {"WU": 54.1, "All Decks": 50.0}
+    assert games == 14883

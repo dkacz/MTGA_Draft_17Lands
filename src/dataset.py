@@ -361,9 +361,16 @@ class Dataset:
                 if unresolved and self._retrieve_unknown:
                     self._pending_ids.add(aid)
                 if card and (not unresolved or not self.skip_unresolved_ids):
-                    # Prefer current statistics when this ID was resolved in an
-                    # earlier session against a different dataset.
-                    card = self._name_index.get(card.get(DATA_FIELD_NAME), card)
+                    # Statistics come only from the active dataset. An ID
+                    # remembered from another dataset keeps its identity and
+                    # metadata; without a current entry its ratings are empty.
+                    current = self._name_index.get(card.get(DATA_FIELD_NAME))
+                    if current is not None:
+                        card = current
+                    elif card.get(DATA_FIELD_DECK_COLORS):
+                        from src.file_extractor import initialize_card_data
+                        card = dict(card)
+                        initialize_card_data(card)
                     name = card.get(DATA_FIELD_NAME, "").removeprefix("Snow-Covered ")
                     basic_color = {
                         "Plains": "W", "Island": "U", "Swamp": "B",

@@ -12,7 +12,7 @@ import tempfile
 import math
 from typing import List, Dict, Any, Optional
 from src.utils import is_cache_stale, normalize_color_string, sanitize_card_name
-from src.constants import BASE_DIR, TIME_PERIOD_SOURCES
+from src.constants import BASE_DIR, TIME_PERIOD_SOURCES, time_period_label
 
 logger = logging.getLogger(__name__)
 
@@ -151,19 +151,28 @@ class Seventeenlands:
         primary = self.download_set_data(
             set_code, draft_format, sources[0], colors, user_group, half(0)
         )
+        if not primary:
+            # The card list must come from the primary period; falling back
+            # to the other period's list would bring back removed cards.
+            raise ValueError(
+                f"17Lands has no {time_period_label(sources[0])} card data for "
+                f"{set_code} {draft_format}. Choose another time period."
+            )
         fallback = self.download_set_data(
             set_code, draft_format, sources[1], colors, user_group, half(50)
         )
-        if not primary:
-            return fallback
 
         counts = {"primary": 0, "fallback": 0, "missing": 0}
         for name, card in primary.items():
             had_rating = bool(card["deck_colors"].get("All Decks", {}).get("gihwr"))
             for key, old in fallback.get(name, {}).get("deck_colors", {}).items():
-                stats = card["deck_colors"].setdefault(key, dict(old))
-                if not stats.get("gihwr") and old.get("gihwr"):
+                if not old.get("gihwr"):
+                    continue
+                # A row missing from the primary period gets no pick order.
+                stats = card["deck_colors"].setdefault(key, {"alsa": 0.0, "ata": 0.0})
+                if not stats.get("gihwr"):
                     stats.update({f: old.get(f, 0) for f in self.WIN_RATE_FIELDS})
+                    stats["period"] = sources[1]
             if had_rating:
                 counts["primary"] += 1
             elif card["deck_colors"].get("All Decks", {}).get("gihwr"):
@@ -357,9 +366,16 @@ class Seventeenlands:
         game_count = 0
         for entry in data:
             if entry.get("is_summary"):
+                # Summaries cover all decks or a color count ("Mono-color",
+                # short_name 1, 2, 3). Only the all-decks row is an archetype.
+                if entry.get("short_name") != "All" and "All Decks" not in str(
+                    entry.get("color_name", "")
+                ):
+                    continue
                 game_count = entry.get("games", 0)
-
-            color_key = entry.get("short_name")
+                color_key = "All Decks"
+            else:
+                color_key = entry.get("short_name")
             if not color_key:
                 color_name = entry.get("color_name", "")
                 if "All Decks" in color_name:

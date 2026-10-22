@@ -2,6 +2,12 @@
 * dkacz: Merged upstream versions 4.22 to 4.24, including faster pick processing, the saved dataset index, the Card Pool color filter, the Sealed fixes and the mana simulator that pays each mana symbol from its own source. The Advisor keeps the fork's sample-weighted ratings and its mana sources based on rules text.
 * dkacz: Added the "Latest Event + All Time" time period. It keeps the card list of the latest event and uses all-time GIH WR for cards that 17Lands does not yet rate in the latest event, because 17Lands publishes GIH WR only after 500 games with the card in hand. Cube datasets use this period by default, so the Arena Powered Cube dataset of October 2026 contains the current 540 cards and no removed cards.
 * dkacz: The download summary reports how many cards received GIH WR from the latest event, from all-time data or not yet, and names cards rated by 17Lands that are missing from the local MTGA card database.
+* dkacz: Win rates filled from all-time data count as at most 500 games in the Advisor's sample smoothing, which is the threshold at which 17Lands publishes a current GIH WR, and the Advisor names their origin. A mixed download fails with a clear message when 17Lands has no latest-event data, and an archetype row missing from the latest event no longer copies all-time pick order.
+* dkacz: A card resolved while another dataset was active keeps its name and metadata but no longer carries that dataset's ratings into the current one.
+* dkacz: After a download, the top bar keeps the newly loaded dataset instead of reloading the previously selected time period.
+* dkacz: The mana simulator matches the colored costs of all ramp cards cast on the same turn together, so two ramp spells can no longer share one colored land.
+* dkacz: Lion's Eye Diamond no longer counts as a color source for spells in hand, because it discards the hand at instant speed.
+* dkacz: 17Lands summary rows no longer create an empty archetype, selecting a cube in the download window defaults to a format that 17Lands offers, and cube downloads report that Scryfall tags are skipped.
 
 * dkacz: Advisor now applies canonical archetype ratings once with sample smoothing. Missing published statistics retain a zero Advisor score.
 * dkacz: Pack recommendations use a playable main-deck core for bounded curve and role adjustments. Pack 3 no longer rebuilds many deck variants for every candidate; wheel estimates no longer penalize Value.

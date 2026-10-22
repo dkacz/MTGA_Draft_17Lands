@@ -170,15 +170,20 @@ def _can_pay(card, pips, pip_count, generic, n_src, cover):
     that produce a color in the union of S's masks. Generic pips then take any
     of the remaining sources.
     """
-    k = pip_count[card]
-    if k + generic[card] > n_src:
+    if pip_count[card] + generic[card] > n_src:
         return False
+    return _hall_ok(pips[card], pip_count[card], cover)
+
+
+@njit(cache=True)
+def _hall_ok(masks, k, cover):
+    """True if the first k pip masks can each take a distinct source (Hall)."""
     for subset in range(1, 1 << k):
         union = 0
         size = 0
         for p in range(k):
             if subset & (1 << p):
-                union |= pips[card, p]
+                union |= masks[p]
                 size += 1
         if cover[union] < size:
             return False
@@ -209,12 +214,13 @@ def _collect_sources(
     matching, so the player can choose the best subset to play; usable lands
     are capped at `turn` (one land drop per turn, on the play).
 
-    Ramp must be in hand on the previous turn and individually payable from
-    that turn's land colors. Ramp cards share a scalar mana budget capped at
-    `turn - 1`, spent greedily in deck order. This approximates deployment on
-    the previous turn without modeling earlier ramp chains or reserving
-    specific colors across ramp payments. Casting ramp is not charged against
-    the current turn's mana.
+    Ramp must be in hand on the previous turn. Ramp cards are accepted
+    greedily in deck order while all accepted costs together stay payable
+    from that turn's lands: the total is capped at `turn - 1` sources and the
+    colored pips of all accepted ramps are matched jointly, so two ramps
+    cannot both spend one colored source. This approximates deployment on the
+    previous turn without modeling earlier ramp chains. Casting ramp is not
+    charged against the current turn's mana.
     """
     n = 0
     for j in range(start, start + seen):
@@ -237,13 +243,21 @@ def _collect_sources(
 
     remaining = min(n_prev, turn - 1)
     has_cover = False
+    paid = np.zeros(MAX_PIPS, dtype=np.int32)  # colored pips of accepted ramps
+    n_paid = 0
     for j in range(start, start + prev_seen):
         idx = deck_indices[j]
         if is_ramp[idx] and costs[idx] < turn and n < MAX_SOURCES:
+            k = pip_count[idx]
+            if costs[idx] > remaining or n_paid + k > MAX_PIPS:
+                continue
             if not has_cover:
                 _fill_cover(land_masks, n_prev, cover)
                 has_cover = True
-            if _can_pay(idx, pips, pip_count, generic, remaining, cover):
+            for p in range(k):
+                paid[n_paid + p] = pips[idx, p]
+            if _hall_ok(paid, n_paid + k, cover):
+                n_paid += k
                 src_masks[n] = mana_produced[idx]
                 n += 1
                 usable += 1

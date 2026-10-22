@@ -103,6 +103,22 @@ def test_cached_alias_uses_current_dataset_statistics(dataset):
     assert dataset.get_data_by_id([999]) == [current]
 
 
+def test_remembered_card_missing_from_current_dataset_has_no_ratings(dataset):
+    """A resolved ID keeps its metadata across datasets, never the statistics
+    of the dataset it was resolved against."""
+    old = {"name": "Old Bomb", "cmc": 3, "types": ["Creature"],
+           "deck_colors": {"All Decks": {"gihwr": 67.0, "samples": 20000}}}
+    dataset._fallback_ratings["999"] = old
+    dataset.clear()
+    other = {"name": "Other Card"}
+    dataset._dataset = {"card_ratings": {"123": other}}
+    dataset._name_index = {"Other Card": other}
+    card = dataset.get_data_by_id([999])[0]
+    assert (card["name"], card["cmc"], card["types"]) == ("Old Bomb", 3, ["Creature"])
+    assert card["deck_colors"]["All Decks"]["gihwr"] == 0.0
+    assert old["deck_colors"]["All Decks"]["gihwr"] == 67.0
+
+
 def test_resolution_preserves_existing_rating_snapshot(dataset, monkeypatch):
     dataset._dataset = {"card_ratings": {"123": {"name": "Known Card"}}}
     snapshot = dataset.get_card_ratings()

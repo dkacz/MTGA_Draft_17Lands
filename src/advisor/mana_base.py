@@ -21,8 +21,16 @@ from src.advisor.card_features import (
 
 
 def _has_mana_spending_restriction(text):
-    """Exclude obvious spend limits from general support, without modeling them."""
+    """Exclude mana that cannot fund ordinary spells from hand, without modeling it.
+
+    This covers explicit spend limits and an instant-speed ability that
+    discards the hand as its cost (Lion's Eye Diamond): no spell remains in
+    hand to pay for, and casting cannot be interrupted to activate it.
+    """
     text = str(text or "").lower().replace("’", "'")
+    if (re.search(r"discard your hand[^:\n]*:[^\n]*\badd\b", text)
+            and "activate only as an instant" in text):
+        return True
     return bool(re.search(
         r"\b(?:spend|use)\b[^.\n]*\bmana\b[^.\n]*\bonly\b"
         r"|\bmana\b[^.\n]*\b(?:can't|cannot|may not|only)\b[^.\n]*\b(?:spent|spend|used|use|cast)\b"

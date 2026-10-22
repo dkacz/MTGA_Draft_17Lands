@@ -378,7 +378,15 @@ class TopBarControls(ttk.Frame):
             self.om_group, self.app.vars["selected_group"], available_groups
         )
 
-        target_group = self.app.vars["selected_group"].get()
+        # Follow the dataset that is actually loaded (e.g. a fresh download of
+        # another period) so that refreshing the controls never reloads the
+        # previously selected file over it.
+        loaded = self.app.configuration.card_data.latest_dataset
+        target_group = next(
+            (g for g, p in self.app.current_set_data_map[evt].items()
+             if os.path.basename(p) == loaded),
+            self.app.vars["selected_group"].get(),
+        )
         if target_group not in available_groups:
             target_group = (
                 "All"

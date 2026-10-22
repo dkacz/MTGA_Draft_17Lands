@@ -64,6 +64,7 @@ def test_green_dork_cannot_fix_blue_spells():
 
 def _cast_with_fixed_order(deck, seen, turn):
     import numpy as np
+    import numpy as np
     from src.advisor.simulator import _castable_on_turn, MAX_SOURCES
 
     arrays = _parse_deck_to_arrays(deck)
@@ -570,3 +571,39 @@ def test_castability_uses_printed_cost_not_landcycling():
     assert stats["cast_t2"] == 0.0
     assert stats["cast_t3"] == 0.0
     assert stats["cast_t4"] == 0.0
+
+
+def test_two_ramps_cannot_share_one_colored_land():
+    """On T2 one Forest casts only one of two {G} ramps, so on T3 a single
+    Birds is the only blue source and {1}{U}{U} stays uncastable."""
+    import numpy as np
+    from src.advisor.simulator import _castable_on_turn, MAX_SOURCES
+    deck = [
+        make_card("Mountain", count=2, types=["Land", "Basic"]),
+        make_card("Forest", types=["Land", "Basic"]),
+        make_card("Birds of Paradise", cmc=1, types=["Creature"], mana_cost="{G}",
+                  text="{T}: Add one mana of any color."),
+        make_card("Noble Hierarch", cmc=1, types=["Creature"], mana_cost="{G}",
+                  text="{T}: Add {G}, {W}, or {U}."),
+        make_card("True-Name Nemesis", cmc=3, types=["Creature"], mana_cost="{1}{U}{U}"),
+        make_card("Expensive", count=34, cmc=6, types=["Creature"], mana_cost="{5}{B}"),
+    ]
+    arrays = _parse_deck_to_arrays(deck)
+    # Hand: Mountain, Birds, Hierarch, Nemesis, 3 expensive; T2 Forest, T3 Mountain.
+    order = np.array([0, 3, 4, 5, 6, 7, 8, 2, 1] + list(range(9, 40)))
+    buffers = (np.zeros(MAX_SOURCES, dtype=np.int32), np.zeros(MAX_SOURCES, dtype=np.int32),
+               np.zeros(32, dtype=np.int32))
+    result = _castable_on_turn(
+        order, 0, 9, 3, arrays.is_land, arrays.is_ramp, arrays.costs,
+        arrays.mana_produced, arrays.pips, arrays.pip_count, arrays.generic, *buffers,
+    )
+    assert tuple(result) == (True, False)
+    # With a second Forest in hand both ramps resolve on T2 and Nemesis is castable.
+    order = np.array([0, 3, 4, 5, 9, 7, 8, 2, 1, 6] + list(range(10, 40)))
+    arrays.is_land[9] = True
+    arrays.mana_produced[9] = 16
+    result = _castable_on_turn(
+        order, 0, 9, 3, arrays.is_land, arrays.is_ramp, arrays.costs,
+        arrays.mana_produced, arrays.pips, arrays.pip_count, arrays.generic, *buffers,
+    )
+    assert tuple(result) == (True, True)

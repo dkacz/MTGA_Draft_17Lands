@@ -6,7 +6,7 @@ Challenges the status quo of Mana Base generation and Monte Carlo simulations.
 import pytest
 from collections import Counter
 from src.card_logic import build_variant_greedy, simulate_deck
-from src.advisor.mana_base import calculate_dynamic_mana_base
+from src.advisor.mana_base import ManaSourceAnalyzer, calculate_dynamic_mana_base, count_fixing
 from unittest.mock import MagicMock
 
 
@@ -413,3 +413,16 @@ def test_legacy_replacement_text_suppresses_future_artifact_mana():
     treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token."}
     assert ManaSourceAnalyzer([visitor, treasure]).suppresses_artifact_token_mana
     assert count_fixing([visitor, treasure]) == dict.fromkeys("WUBRG", 0)
+
+
+def test_discard_hand_instant_mana_does_not_fix_spells_from_hand():
+    """Lion's Eye Diamond discards the hand at instant speed, so it cannot pay
+    for a spell from hand; one-shot artifacts without that cost still fix."""
+    led = {"name": "Lion's Eye Diamond", "types": ["Artifact"], "mana_cost": "{0}",
+           "oracle_text": "Discard your hand, Sacrifice this artifact: Add three mana "
+                          "of any one color. Activate only as an instant."}
+    lotus = {"name": "Black Lotus", "types": ["Artifact"], "mana_cost": "{0}",
+             "oracle_text": "{T}, Sacrifice this artifact: Add three mana of any one color."}
+    assert ManaSourceAnalyzer([led]).any_color_sources == 0
+    assert count_fixing([led]) == {c: 0 for c in "WUBRG"}
+    assert ManaSourceAnalyzer([lotus]).any_color_sources == 1

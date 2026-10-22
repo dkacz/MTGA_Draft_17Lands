@@ -241,6 +241,31 @@ def test_on_event_change_updates_group_dropdown(root, mock_app_context):
 
 
 @patch("src.ui.top_bar.write_configuration")
+def test_refresh_keeps_the_freshly_loaded_period(mock_write, root, mock_app_context):
+    """A download activates a new period's file; refreshing the controls must
+    select its group instead of reloading the previously selected period."""
+    top_bar = TopBarControls(root, mock_app_context)
+    mock_app_context._initialized = True
+    mock_app_context.vars["selected_event"].set("PremierDraft")
+    mock_app_context.vars["selected_group"].set("All (All Time)")
+    mock_app_context.current_set_data_map = {"PremierDraft": {
+        "All (All Time)": "/sets/CUBE_PremierDraft_All_Custom-AllTime_Data.json",
+        "All (Latest Event + All Time)": "/sets/CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json",
+    }}
+    mock_app_context.configuration.card_data.latest_dataset = (
+        "CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json"
+    )
+
+    top_bar.on_event_change()
+
+    assert mock_app_context.vars["selected_group"].get() == "All (Latest Event + All Time)"
+    mock_app_context.orchestrator.scanner.retrieve_set_data.assert_not_called()
+    assert mock_app_context.configuration.card_data.latest_dataset == (
+        "CUBE_PremierDraft_All_Custom-LatestWithAllTime_Data.json"
+    )
+
+
+@patch("src.ui.top_bar.write_configuration")
 @patch("src.ui.top_bar.os.path.basename", return_value="path.json")
 def test_on_group_change_loads_dataset(
     mock_basename, mock_write, root, mock_app_context

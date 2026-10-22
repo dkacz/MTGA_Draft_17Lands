@@ -42,13 +42,18 @@ class ScryfallTagger:
         if not os.path.exists(self.CACHE_DIR):
             os.makedirs(self.CACHE_DIR)
 
+    @staticmethod
+    def skips(set_code: str) -> bool:
+        """Cube card pools span many sets; tagging them would abuse the API."""
+        return "CUBE" in str(set_code).upper()
+
     def harvest_set_tags(
         self, set_code: str, progress_callback=None
     ) -> Dict[str, List[str]]:
         """
         Queries Scryfall for specific tags in a set.
         """
-        if "CUBE" in set_code.upper():
+        if self.skips(set_code):
             logger.info(
                 f"Skipping Scryfall community tags for {set_code} to prevent API abuse."
             )

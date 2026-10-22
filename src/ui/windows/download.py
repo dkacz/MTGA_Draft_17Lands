@@ -558,13 +558,14 @@ class DownloadWindow(ttk.Frame):
                 formats_to_show = (
                     s_info.formats if s_info.formats else constants.LIMITED_TYPE_LIST
                 )
-                formats_to_show = sorted(formats_to_show)
 
-                for f in formats_to_show:
+                for f in sorted(formats_to_show):
                     menu.add_command(
                         label=f, command=lambda v=f: self.vars["event"].set(v)
                     )
                 if formats_to_show:
+                    # Set metadata lists the formats 17Lands offers first; the
+                    # alphabetical first entry may be a format without data.
                     self.vars["event"].set(formats_to_show[0])
             except:
                 pass

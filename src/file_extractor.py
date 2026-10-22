@@ -691,6 +691,9 @@ class FileExtractor(UIProgress):
                 user_group=self.user_group,
                 progress_callback=update_ui,
             )
+        except ValueError as e:
+            # Invalid or unavailable 17Lands data: the message names the problem.
+            return False, str(e), 0
         except Exception as e:
             if "404" in str(e) or "400" in str(e):
                 logger.warning(
@@ -746,7 +749,9 @@ class FileExtractor(UIProgress):
 
         tag_status = str(cards_with_tags)
         if cards_with_tags == 0:
-            if tag_errors:
+            if ScryfallTagger.skips(set_code):
+                tag_status += " (Skipped for Cube datasets)"
+            elif tag_errors:
                 tag_status += " (Network/API Error)"
             else:
                 tag_status += " (Not yet tagged by Scryfall community)"

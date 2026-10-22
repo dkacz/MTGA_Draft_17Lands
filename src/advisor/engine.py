@@ -125,7 +125,9 @@ class DraftAdvisor:
                     reasons = ["No published GIHWR"]
                 else:
                     final = max(0.0, base + max(-10.0, min(10.0, role_bonus + scarcity))) * cast_fit
-                    if 0 < samples < 500:
+                    if stats_for(card).get("period"):
+                        reasons.append("GIH WR from all-time data")
+                    elif 0 < samples < 500:
                         reasons.append(f"Small GIH sample ({samples})")
                     elif samples == 0:
                         reasons.append("GIH sample size unavailable")
