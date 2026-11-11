@@ -12,9 +12,9 @@ has the color pairs' game counts. A card without a 17Lands GIH WR gets the
 prediction, and a card with one keeps it and gains the prediction in
 "predicted_gihwr", toward which the advisor shrinks a small sample. A card's
 missing GIH WR in a color pair is then filled from its overall GIH WR and the
-pair's shift. Every filled value has the PREDICTED period and counts as
-FALLBACK_SAMPLE_CAP games, like a value filled from another time period.
-Without a prior file for the set the dataset is left unchanged.
+pair's shift. Every filled value has the PREDICTED period, which the interface
+marks and the advisor uses without shrinking it again. Without a prior file
+for the set the dataset is left unchanged.
 """
 
 import json
@@ -24,11 +24,7 @@ from collections import Counter, defaultdict
 from statistics import NormalDist
 
 from src import constants
-from src.advisor.card_quality import (
-    FALLBACK_SAMPLE_CAP,
-    observed_win_rate,
-    sample_count,
-)
+from src.advisor.card_quality import is_predicted, observed_win_rate, sample_count
 from src.utils import normalize_color_string
 
 logger = logging.getLogger(__name__)
@@ -38,18 +34,9 @@ PRIOR_FILE_SUFFIX = "_prior.json"
 
 # A pair's shift for a group of cards (both colors, one color, colorless or
 # outside the pair) is the games-weighted mean over at least this many cards
-# with both rates. A smaller group would make the shift mostly noise, so it
-# uses the mean over all cards with both rates in that pair.
+# with both rates. A smaller group would make the shift mostly noise, so its
+# cards take the shift from the strength of the pair and of their own colors.
 MIN_SHIFT_CARDS = 10
-
-
-def is_predicted(stats, field=constants.DATA_FIELD_GIHWR):
-    """True when the stats' GIH WR is a prediction, not a 17Lands value."""
-    return (
-        field == constants.DATA_FIELD_GIHWR
-        and isinstance(stats, dict)
-        and stats.get("period") == constants.PREDICTED_PERIOD
-    )
 
 
 def normal_scores(values):
@@ -182,38 +169,37 @@ def _pair_group(colors, pair):
 
 
 def _pair_shifts(cards):
-    """{pair: (shift for all cards, {group: shift})}, each shift the
-    games-weighted mean of the pair's GIH WR minus the overall GIH WR over the
-    cards with both rates."""
+    """{pair: {group: shift}} for every color pair with rows in the dataset.
+
+    A group's shift is the games-weighted mean of the pair's GIH WR minus the
+    overall GIH WR over its cards with both rates, given only for a group with
+    at least MIN_SHIFT_CARDS such cards.
+    """
     sums = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0]))
     for card in cards.values():
         deck_colors = card[constants.DATA_FIELD_DECK_COLORS]
         overall = observed_win_rate(deck_colors["All Decks"])
-        if not overall:
-            continue
         colors = _card_colors(card)
         for pair, stats in deck_colors.items():
             if len(pair) != 2 or not isinstance(stats, dict):
                 continue
             rate, games = observed_win_rate(stats), sample_count(stats)
-            if rate and games:
-                for group in (_pair_group(colors, pair), None):
-                    total = sums[pair][group]
-                    total[0] += (rate - overall) * games
-                    total[1] += games
-                    total[2] += 1
-    shifts = {}
-    for pair, groups in sums.items():
-        everyone = groups.pop(None)
-        shifts[pair] = (
-            everyone[0] / everyone[1],
-            {
-                group: total[0] / total[1]
-                for group, total in groups.items()
-                if total[2] >= MIN_SHIFT_CARDS
-            },
-        )
-    return shifts
+            if not (rate or games):
+                continue
+            groups = sums[pair]
+            if overall and rate and games:
+                total = groups[_pair_group(colors, pair)]
+                total[0] += (rate - overall) * games
+                total[1] += games
+                total[2] += 1
+    return {
+        pair: {
+            group: total[0] / total[1]
+            for group, total in groups.items()
+            if total[2] >= MIN_SHIFT_CARDS
+        }
+        for pair, groups in sums.items()
+    }
 
 
 def _set_code(data):
@@ -228,7 +214,6 @@ def _set_code(data):
 
 def _fill(stats, value):
     stats[constants.DATA_FIELD_GIHWR] = round(value, 2)
-    stats["samples"] = FALLBACK_SAMPLE_CAP
     stats["period"] = constants.PREDICTED_PERIOD
 
 
@@ -288,14 +273,23 @@ def apply_rating_prior(data, folder=None):
             overall = observed_win_rate(deck_colors["All Decks"])
             if not overall:
                 continue
-            for pair, (shift_all, group_shifts) in shifts.items():
+            for pair, group_shifts in shifts.items():
                 # A row missing from the dataset gets no pick order, as in
                 # the fallback period of Seventeenlands._download_with_fallback.
                 stats = deck_colors.setdefault(pair, {"alsa": 0.0, "ata": 0.0})
-                if not observed_win_rate(stats):
-                    shift = group_shifts.get(_pair_group(colors, pair), shift_all)
-                    _fill(stats, overall + shift)
-                    counts["pairs"] += card is entries[0]
+                if observed_win_rate(stats):
+                    continue
+                shift = group_shifts.get(_pair_group(colors, pair))
+                if shift is None:
+                    # The pair's strength less the strength already in the
+                    # card's overall rate, 0 without the pairs' game counts.
+                    shift = color_weight * (
+                        strength[pair] - strength.get(colors, 0.0)
+                        if pair in strength
+                        else 0.0
+                    )
+                _fill(stats, overall + shift)
+                counts["pairs"] += card is entries[0]
     logger.info(
         "Rating prior %s: predicted GIH WR for %d cards and %d color-pair values",
         prior.get("set"),

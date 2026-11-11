@@ -15,6 +15,7 @@ from src.ui.components import (
     SignalMeter,
     ManaCurvePlot,
     TypePieChart,
+    card_row_tags,
 )
 from src.ui.advisor_view import AdvisorPanel
 from src.configuration import write_configuration
@@ -537,6 +538,7 @@ class CompactOverlay(tb.Toplevel):
                         "card_name": name,
                         "vals": row_values,
                         "tag": row_tag,
+                        "card": card,
                         "sort_key": sort_val,
                     }
                 )
@@ -556,7 +558,7 @@ class CompactOverlay(tb.Toplevel):
                     "end",
                     text=row.get("card_name", ""),
                     values=row["vals"],
-                    tags=(row["tag"],),
+                    tags=card_row_tags(row["card"], row["tag"]),
                 )
 
             if hasattr(tree, "reapply_sort"):

@@ -495,8 +495,8 @@ TIME_PERIOD_DEFAULT = "ALL_TIME"
 # all-time data alone includes cards removed from the cube.
 TIME_PERIOD_SOURCES = {"LATEST_WITH_ALL_TIME": ("LATEST_EVENT", "ALL_TIME")}
 # The period of a GIH WR that src/rating_prior.py predicted for a card that
-# 17Lands has not rated yet. Like a value from the fallback period above, it
-# counts as at most FALLBACK_SAMPLE_CAP games in the advisor.
+# 17Lands has not rated yet. The interface marks such a value, and the advisor
+# uses it without shrinking it again (src/advisor/card_quality.py).
 PREDICTED_PERIOD = "PREDICTED"
 TIME_PERIOD_CUBE_DEFAULT = "LATEST_WITH_ALL_TIME"
 

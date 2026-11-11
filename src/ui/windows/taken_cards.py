@@ -17,6 +17,7 @@ from src.ui.components import (
     ScrolledFrame,
     CardPile,
     ColorFilterSelector,
+    card_row_tags,
 )
 from src.card_logic import format_win_rate
 from src.rating_prior import is_predicted
@@ -295,7 +296,11 @@ class TakenCardsPanel(ttk.Frame):
                 tag = row_color_tag(card.get(constants.DATA_FIELD_MANA_COST, ""))
 
             t.insert(
-                "", "end", text=card.get("name", ""), values=row_values, tags=(tag,)
+                "",
+                "end",
+                text=card.get("name", ""),
+                values=row_values,
+                tags=card_row_tags(card, tag),
             )
 
         if hasattr(t, "reapply_sort"):

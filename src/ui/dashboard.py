@@ -23,6 +23,7 @@ from src.ui.components import (
     TypePieChart,
     CollapsibleFrame,
     AutoScrollbar,
+    card_row_tags,
 )
 from src.advisor.schema import Recommendation
 from src.ui.advisor_view import AdvisorPanel
@@ -743,6 +744,7 @@ class DashboardFrame(ttk.Frame):
                     "card_name": name,
                     "vals": row_values,
                     "tag": row_tag,
+                    "card": card,
                     "sort_key": (
                         rec.contextual_score if rec else stats.get("gihwr", 0.0)
                     ),
@@ -763,7 +765,7 @@ class DashboardFrame(ttk.Frame):
                 "end",
                 text=row.get("card_name", ""),
                 values=row["vals"],
-                tags=(row["tag"],),
+                tags=card_row_tags(row["card"], row["tag"]),
             )
 
         if hasattr(tree, "reapply_sort"):

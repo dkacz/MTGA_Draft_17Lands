@@ -7,7 +7,12 @@ import tkinter
 from tkinter import ttk
 from src import constants
 from src.ui.styles import Theme
-from src.ui.components import DynamicTreeviewManager, AutocompleteEntry, CardToolTip
+from src.ui.components import (
+    DynamicTreeviewManager,
+    AutocompleteEntry,
+    CardToolTip,
+    card_row_tags,
+)
 from src.card_logic import format_win_rate, row_color_tag
 from src.rating_prior import is_predicted
 
@@ -162,7 +167,7 @@ class ComparePanel(ttk.Frame):
                 "end",
                 text=card.get("name", ""),
                 values=row_values,
-                tags=(tag,),
+                tags=card_row_tags(card, tag),
             )
 
         if hasattr(t, "reapply_sort"):

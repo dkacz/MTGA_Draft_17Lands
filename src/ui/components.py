@@ -16,6 +16,35 @@ from src.card_logic import field_process_sort
 from src.rating_prior import is_predicted
 from src.ui.styles import Theme
 
+# Amber text for a predicted GIH WR (src/rating_prior.py): light amber on a
+# dark background, dark amber on a light one.
+PREDICTED_ON_DARK = "#fbbf24"
+PREDICTED_ON_LIGHT = "#b45309"
+
+
+def predicted_color(widget):
+    """The amber for a predicted GIH WR on the theme's background."""
+    try:
+        r, g, b = (v / 65535 for v in widget.winfo_rgb(Theme.BG_PRIMARY))
+    except tkinter.TclError:
+        return PREDICTED_ON_DARK
+    dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5
+    return PREDICTED_ON_DARK if dark else PREDICTED_ON_LIGHT
+
+
+def card_row_tags(card, row_tag):
+    """Treeview tags for a card's row: its own tag, and a tag that turns the
+    text amber when the card's overall GIH WR is predicted. The row keeps its
+    background, and a picked row keeps its white text."""
+    overall = card.get("deck_colors", {}).get("All Decks", {})
+    if row_tag == "picked" or not is_predicted(overall):
+        return (row_tag,)
+    if row_tag == "elite_bomb":
+        return (row_tag, "predicted_on_dark")
+    if row_tag.endswith("_card"):
+        return (row_tag, "predicted_on_light")
+    return (row_tag, "predicted_on_zebra")
+
 
 def identify_safe_coordinates(root, window_width, window_height, offset_x, offset_y):
     try:
@@ -355,8 +384,7 @@ class CardToolTip(tkinter.Toplevel):
         def fp(v, i=False):
             return "-" if not v else (f"{v:+.1f}%" if i else f"{v:.1f}%")
 
-        # "~" marks a predicted GIH WR, which has no games of its own.
-        predicted = is_predicted(gs)
+        predicted = is_predicted(gs)  # "~" marks a predicted GIH WR
 
         def fn(v):
             return "-" if not v else (f"{v:.2f}" if isinstance(v, float) else f"{v:,}")
@@ -366,7 +394,9 @@ class CardToolTip(tkinter.Toplevel):
                 (
                     "GIH WR:",
                     ("~" if predicted else "") + fp(wr),
-                    Theme.SUCCESS if wr >= 55.0 else Theme.TEXT_MAIN,
+                    predicted_color(self)
+                    if predicted
+                    else (Theme.SUCCESS if wr >= 55.0 else Theme.TEXT_MAIN),
                 ),
                 (
                     "IWD:",
@@ -378,7 +408,7 @@ class CardToolTip(tkinter.Toplevel):
                 ("ALSA:", fn(gs.get("alsa", 0.0)), Theme.TEXT_MAIN),
                 ("ATA:", fn(gs.get("ata", 0.0)), Theme.TEXT_MAIN),
             ],
-            [("Games:", "-" if predicted else fn(smp), Theme.TEXT_MAIN), ("", "", "")],
+            [("Games:", f"{fn(smp)}", Theme.TEXT_MAIN), ("", "", "")],
         ]
         for ri, row in enumerate(mt):
             for ci, (lbl, val, col) in enumerate(row):
@@ -879,6 +909,13 @@ class ModernTreeview(ttk.Treeview):
 
     def _apply_dynamic_row_colors(self):
         from src.ui.styles import Theme
+
+        # Amber text for rows whose GIH WR is predicted (card_row_tags). Tk
+        # gives the tag created first the higher priority, so these tags are
+        # created before the row tags below and only change the text colour.
+        self.tag_configure("predicted_on_dark", foreground=PREDICTED_ON_DARK)
+        self.tag_configure("predicted_on_light", foreground=PREDICTED_ON_LIGHT)
+        self.tag_configure("predicted_on_zebra", foreground=predicted_color(self))
 
         # Standard Zebra Striping
         self.tag_configure(

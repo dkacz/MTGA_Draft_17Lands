@@ -103,6 +103,14 @@ games-weighted mean over the pairs that contain its color, and a colorless or
 three-color card gets nothing. The pairs' game counts are in datasets
 downloaded by this version of the app.
 
+A card's missing GIH WR in a color pair becomes its overall GIH WR plus the
+pair's shift, the games-weighted mean of the pair's GIH WR minus the overall
+GIH WR over the cards of the same group (both colors of the pair, one of them,
+colorless or outside the pair) that have both rates. A group with fewer than
+10 such cards uses the strength of the pair less the strength of the card's
+own colors, computed as for `color` above, and 0 without the pairs' game
+counts.
+
 `build_prior.py` writes the stage 1 constants. `mean` and `sd` are the averages
 over past sets of the mean and standard deviation of card GIH WR, and `scale`
 is the correlation of the reviewers' score with GIH WR, weighted by cards. The

@@ -27,6 +27,7 @@ from src.ui.components import (
     TypePieChart,
     CardToolTip,
     AutoScrollbar,
+    card_row_tags,
 )
 from src.card_logic import copy_deck, get_deck_metrics
 from src.rating_prior import is_predicted
@@ -926,7 +927,7 @@ class SealedStudioWindow(tb.Toplevel):
                 iid=str(idx),
                 text=card.get("name", ""),
                 values=row_values,
-                tags=(tag,),
+                tags=card_row_tags(card, tag),
             )
 
         if hasattr(tree, "reapply_sort"):

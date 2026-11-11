@@ -22,7 +22,12 @@ from PIL import Image, ImageTk
 from src import constants
 from src.card_logic import copy_deck, get_strict_colors, is_castable, get_functional_cmc
 from src.ui.styles import Theme
-from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.components import (
+    DynamicTreeviewManager,
+    CardToolTip,
+    AutoScrollbar,
+    card_row_tags,
+)
 from src.utils import bind_scroll, normalize_color_string
 from src.rating_prior import is_predicted
 
@@ -1126,7 +1131,7 @@ class SuggestDeckPanel(ttk.Frame):
                     iid=str(idx),
                     text=name,
                     values=row_values,
-                    tags=(tag,),
+                    tags=card_row_tags(card, tag),
                 )
             if hasattr(tree, "reapply_sort"):
                 tree.reapply_sort()
