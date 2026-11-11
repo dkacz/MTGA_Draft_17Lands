@@ -7,6 +7,7 @@ or types of the card that must first be cast.
 import re
 
 from src import constants
+from src.mana_cost import off_color_requirements
 
 
 def get_main_face(card):
@@ -98,28 +99,18 @@ def get_mana_colors(card):
     return [c for c in constants.CARD_COLORS if c in options]
 
 
-def get_color_requirements(card):
-    """One tuple of acceptable colors per mandatory colored mana symbol.
+def get_off_color_requirements(card, colors):
+    """Colored symbols of the primary card that these colors cannot pay.
 
-Generic hybrid and Phyrexian symbols have a noncolored payment option, so do
-not impose a mandatory colored source. This tests color access, not timing,
-source quantity, life totals, or access to an optional linked spell.
-"""
-    cost = get_main_mana_cost(card)
-    if not cost:
-        return [(c,) for c in get_main_colors(card)]
-    requirements = []
-    for pip in re.findall(r"\{([^}]+)\}", cost.upper()):
-        options = pip.split("/")
-        if any(opt.isdigit() or opt in ("X", "C", "P", "S") for opt in options):
-            continue
-        colors = tuple(c for c in constants.CARD_COLORS if c in options)
-        if colors:
-            requirements.append(colors)
-    return requirements
+    The payment rules are the shared ones in src.mana_cost: one entry per
+    symbol, holding the colors that can pay it, so a hybrid symbol needs only
+    one of its colors and {2/U} or {U/P} never require a color. This tests
+    color access, not timing, source quantity, life totals, or access to an
+    optional linked spell.
+    """
+    return off_color_requirements(get_main_face(card), colors)
 
 
 def is_on_color(card, colors):
-    """Whether the primary card can pay all colored pips using these colors."""
-    return all(any(c in colors for c in options)
-               for options in get_color_requirements(card))
+    """Whether the primary card can pay all colored symbols using these colors."""
+    return not get_off_color_requirements(card, colors)

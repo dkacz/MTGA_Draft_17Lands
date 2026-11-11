@@ -8,12 +8,8 @@ import logging
 import itertools
 from src import constants
 from src.card_utils import get_functional_cmc, stack_cards
-from src.advisor.card_features import (
-    get_color_requirements,
-    get_main_types,
-    get_mana_colors,
-)
 from src.utils import normalize_color_string
+from src.mana_cost import mana_color_demand, off_color_requirements
 from src.advisor.mana_base import (
     is_castable,
     select_useful_lands,
@@ -21,7 +17,6 @@ from src.advisor.mana_base import (
     count_fixing,
     get_strict_colors,
     create_basic_lands,
-    ManaSourceAnalyzer,
 )
 from src.advisor.deck_scorer import (
     get_card_rating,
@@ -183,7 +178,6 @@ def brute_force_mana_base(spells, non_basic_lands, colors, forced_count=17):
 
 
 def optimize_deck(base_deck, base_sb, archetype_key, colors):
-    archetype_key = normalize_color_string(archetype_key)
     total_cards = sum(c.get("count", 1) for c in base_deck)
     if total_cards != 40:
         return (
@@ -193,12 +187,12 @@ def optimize_deck(base_deck, base_sb, archetype_key, colors):
             f"Error: Deck must be exactly 40 cards to optimize (currently {total_cards}).",
         )
 
-    spells = [c for c in base_deck if "Land" not in get_main_types(c)]
-    lands = [c for c in base_deck if "Land" in get_main_types(c)]
+    spells = [c for c in base_deck if "Land" not in c.get("types", [])]
+    lands = [c for c in base_deck if "Land" in c.get("types", [])]
     sb_spells = [
         c
         for c in base_sb
-        if "Land" not in get_main_types(c) and is_castable(c, colors, strict=True)
+        if "Land" not in c.get("types", []) and is_castable(c, colors, strict=True)
     ]
 
     def get_wr(c):
@@ -222,17 +216,14 @@ def optimize_deck(base_deck, base_sb, archetype_key, colors):
     basic_lands = [
         c
         for c in lands
-        if "Basic" in get_main_types(c) or c.get("name") in constants.BASIC_LANDS
+        if "Basic" in c.get("types", []) or c.get("name") in constants.BASIC_LANDS
     ]
     cuttable_land = basic_lands[0] if basic_lands else None
     colorless_utility_lands = [
         c
         for c in lands
-        # count_fixing deliberately excludes basics; they are ordinary mana
-        # sources, not candidates for replacing a colorless utility land.
-        if "Basic" not in get_main_types(c)
-        and c.get("name") not in constants.BASIC_LANDS
-        and not any(count_fixing([c]).values())
+        if not c.get("colors")
+        and not any(fn in c.get("name", "").lower() for fn in constants.FIXING_NAMES)
     ]
     worst_colorless_land = (
         min(colorless_utility_lands, key=get_wr) if colorless_utility_lands else None
@@ -330,12 +321,7 @@ def optimize_deck(base_deck, base_sb, archetype_key, colors):
         permutations.append((f"Play 16 Lands (+{best_sb_spell['name']})", d, s))
 
     if worst_colorless_land:
-        pip_counts = {c: 0 for c in constants.CARD_COLORS}
-        for c in spells:
-            for options in get_color_requirements(c):
-                offered = [opt for opt in options if opt in colors] or options
-                chosen = max(offered, key=lambda opt: pip_counts[opt])
-                pip_counts[chosen] += c.get("count", 1)
+        pip_counts = mana_color_demand(spells, colors)
 
         best_basic_color = (
             max(pip_counts, key=pip_counts.get)
@@ -416,7 +402,7 @@ def suggest_deck(
     pool_size = len(taken_cards)
     is_bo3 = "Trad" in event_type
 
-    playable_spells = [c for c in taken_cards if "Land" not in get_main_types(c)]
+    playable_spells = [c for c in taken_cards if "Land" not in c.get("types", [])]
     if not playable_spells or len(playable_spells) < 15:
         return sorted_decks
 
@@ -439,23 +425,12 @@ def suggest_deck(
         def process_variant(variant_name, deck, sb, colors, arch_key):
             if not deck:
                 return
-            spells = [c for c in deck if "Land" not in get_main_types(c)]
+            spells = [c for c in deck if "Land" not in c.get("types", [])]
             spell_count = sum(c.get("count", 1) for c in spells)
             if spell_count < 15:
                 return
 
-            pips = {c: 0 for c in constants.CARD_COLORS}
-            hybrid_pips = []
-            for card in spells:
-                for options in get_color_requirements(card):
-                    if len(options) == 1:
-                        pips[options[0]] += card.get("count", 1)
-                    else:
-                        hybrid_pips.append((options, card.get("count", 1)))
-            for options, count in hybrid_pips:
-                offered = [c for c in options if c in colors] or options
-                chosen = max(offered, key=lambda c: pips[c])
-                pips[chosen] += count
+            pips = mana_color_demand(spells, colors)
 
             active_colors = sorted(
                 [c for c, count in pips.items() if count > 0],
@@ -615,7 +590,9 @@ def suggest_deck(
         soup_deck, soup_colors = build_variant_soup(taken_cards, metrics)
         if soup_deck:
             soup_arch_key = (
-                normalize_color_string("".join(soup_colors[:3])) if soup_colors else "All Decks"
+                normalize_color_string("".join(soup_colors[:3]))
+                if soup_colors
+                else "All Decks"
             )
             process_variant(
                 "Good Stuff (Soup)",
@@ -741,7 +718,7 @@ def build_variant_consistency(pool, colors, metrics, tier_data=None):
     candidates = [
         c
         for c in pool
-        if is_castable(c, colors, strict=True) and "Land" not in get_main_types(c)
+        if is_castable(c, colors, strict=True) and "Land" not in c.get("types", [])
     ]
     candidates.sort(key=lambda x: get_card_rating(x, colors, metrics), reverse=True)
     spells, non_basic_lands = (
@@ -777,33 +754,25 @@ def build_variant_greedy(pool, colors, metrics, tier_data=None):
     splash_candidates, best_rating = [], global_mean - (global_std * 0.5)
 
     for card in pool:
-        card_colors = get_mana_colors(card)
-        if "Land" in get_main_types(card):
+        off_color = off_color_requirements(card, colors)
+        if not off_color or "Land" in card.get("types", []):
             continue
-        if (
-            is_castable(card, colors, strict=True)
-            or not card_colors
-            or len(card_colors) > 1
-        ):
-            continue
-
-        splash_col, off_color_pips = card_colors[0], 0
-        for options in get_color_requirements(card):
-            if options and not any(opt in colors for opt in options):
-                off_color_pips += 1
-
-        if off_color_pips > 1:
+        rating = get_card_rating(card, ["All Decks"], metrics)
+        # A one-color splash must satisfy every remaining symbol. A hybrid
+        # can supply either route; genuine {U}{R} gold has no one-color route.
+        for splash_col in constants.CARD_COLORS:
+            if not all(splash_col in options for options in off_color):
+                continue
             total_fixing = fixing_sources.get(splash_col, 0)
-            if not (
-                off_color_pips == 2
-                and get_functional_cmc(card) >= 5
-                and total_fixing >= 3
+            # Two real sources: the old check added this same count twice
+            # against a threshold of 3.
+            if len(off_color) > 1 and not (
+                len(off_color) == 2 and get_functional_cmc(card) >= 5
+                and total_fixing >= 2
             ):
                 continue
-
-        rating = get_card_rating(card, ["All Decks"], metrics)
-        if rating > best_rating and fixing_sources.get(splash_col, 0) >= 1:
-            splash_candidates.append((card, splash_col, rating))
+            if rating > best_rating and total_fixing >= 1:
+                splash_candidates.append((card, splash_col, rating))
 
     if not splash_candidates:
         return None, ""
@@ -815,7 +784,7 @@ def build_variant_greedy(pool, colors, metrics, tier_data=None):
     main_spells = [
         c
         for c in pool
-        if is_castable(c, colors, strict=True) and "Land" not in get_main_types(c)
+        if is_castable(c, colors, strict=True) and "Land" not in c.get("types", [])
     ]
     main_spells.sort(key=lambda x: get_card_rating(x, colors, metrics), reverse=True)
 
@@ -858,7 +827,7 @@ def build_variant_curve(pool, colors, metrics, tier_data=None):
     candidates = [
         c
         for c in pool
-        if is_castable(c, colors, strict=True) and "Land" not in get_main_types(c)
+        if is_castable(c, colors, strict=True) and "Land" not in c.get("types", [])
     ]
 
     def tempo_rating(card):
@@ -893,15 +862,35 @@ def build_variant_curve(pool, colors, metrics, tier_data=None):
 
 
 def build_variant_soup(pool, metrics, tier_data=None):
-    candidates = [c for c in pool if "Land" not in get_main_types(c)]
-    pool_sources = ManaSourceAnalyzer(pool)
+    candidates = [c for c in pool if "Land" not in c.get("types", [])]
 
     def soup_rating(card):
-        base = get_card_rating(card, ["All Decks"], metrics, tier_data)
-        card_sources = ManaSourceAnalyzer(
-            [card], suppress_artifact_token_mana=pool_sources.suppresses_artifact_token_mana
+        base, tags = (
+            get_card_rating(card, ["All Decks"], metrics, tier_data),
+            card.get("tags", []),
         )
-        is_fixer = card_sources.total_fixing_cards > 0
+        text, name = (
+            str(card.get("oracle_text", card.get("text", ""))).lower(),
+            str(card.get("name", "")).lower(),
+        )
+
+        is_fixer = "fixing_ramp" in tags or any(
+            fn in name for fn in constants.FIXING_NAMES
+        )
+        if not is_fixer:
+            universal_phrases = [
+                "any color",
+                "any one color",
+                "any type",
+                "chosen color",
+                "{w}, {u}, {b}, {r}, or {g}",
+                "search your library for a basic",
+                "create a treasure",
+                "treasure token",
+                "basic landcycling",
+            ]
+            if any(phrase in text for phrase in universal_phrases):
+                is_fixer = True
         return base + 5.0 if is_fixer else base
 
     candidates.sort(key=soup_rating, reverse=True)

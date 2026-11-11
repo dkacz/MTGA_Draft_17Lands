@@ -1,6 +1,6 @@
 # System Overview & Architecture
 
-**Status:** Active | **Current Version:** 4.16 | **Target:** Architecture Specification
+**Status:** Active | **Current Version:** 4.31 | **Target:** Architecture Specification
 
 ## 1. Introduction
 
@@ -44,7 +44,7 @@ graph TD
 | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------- | :------------------------------ |
 | **Log Scanner**    | Tails `Player.log` on a background thread, executes normalized matching, manages state machine (Idle -> Drafting -> Sealed -> Game).                                       | OS File System   | **High** (App fails without it) |
 | **Data Manager**   | Downloads/Caches cloud datasets. Handles 17Lands/Scryfall fallback (if data is missing/incomplete).                                                                        | 17Lands API      | **High**                        |
-| **Advisor Engine** | The "Compositional Brain" (v5.5). Normalizes win-rates, calculates Z-Scores, applies Lane Commitment, tracks VOR (Value Over Replacement), and measures pip-density.       | None (Pure Math) | **High**                        |
+| **Advisor Engine** | The "Compositional Brain" (v5.5). Normalizes win-rates, calculates Z-Scores, weighs archetype win rates, applies Lane Commitment, and measures pip-density.                | None (Pure Math) | **High**                        |
 | **Deck Builder**   | Interactive drag-and-drop deck construction environment. Generates base archetypes, applies 1-click "Auto-Lands" math, and features an on-demand AI Monte Carlo optimizer. | Card Logic       | Medium                          |
 | **Sealed Studio**  | A dedicated workspace for 90+ card pools featuring AI Shell Generation and a 1-to-1 MTGA-style visual CMC-stacked interface.                                               | Card Logic       | Medium                          |
 
@@ -87,3 +87,5 @@ persisted as resolved cards.
 1. **Rate Limiting:** 17Lands and Scryfall API requests must be cached aggressively. The 17Lands multi-archetype downloader reuses validated raw caches for 12 hours and waits 1.5 seconds after network fetches; request failures propagate to the download UI. Retry behavior varies by integration; the manual card downloader does not implement automatic exponential backoff.
 2. **Color Normalization:** All color strings must be sorted WUBRG (`GW` -> `WG`). The keys in 17Lands JSONs vary; the app normalizes them upon dataset ingestion to ensure dictionary lookups never fail.
 3. **Manual Dataset Saves:** Validate raw card responses before caching and stage assembled datasets in Sets before atomically replacing the destination. A failed export preserves the prior file and active selection. See [External Integrations](04-external-integrations.md) for validation boundaries and regression coverage.
+4. **Dataset Statistics:** Resolved-ID caches contain metadata only. Alternate IDs use the active dataset's ratings by name or remain unrated; statistics must not cross dataset boundaries.
+5. **Mana Payment:** Advisor castability, splash checks, land demand and deck labels share `src/mana_cost.py`. Card colors remain rules metadata; hybrid payment needs only one option per symbol. See [Hybrid Mana](hybrid-mana.md) for the contract and simulator limitations.

@@ -89,6 +89,13 @@ def create_mock_dataset(path):
                 "colors": ["G"],
                 "deck_colors": {"All Decks": {"gihwr": 56.0, "alsa": 5.0}},
             },
+            "109": {
+                "name": "Filler G4",
+                "cmc": 2,
+                "types": ["Creature"],
+                "colors": ["G"],
+                "deck_colors": {"All Decks": {"gihwr": 56.0, "alsa": 5.0}},
+            },
         },
     }
     with open(path, "w") as f:
@@ -204,10 +211,10 @@ class TestBrainIntegration:
     def test_wheel_estimate_does_not_reduce_value(self, env):
         app, log, root = env["app"], env["log"], env["root"]
 
-        # Pick 2.
+        # Pick 2. A pack needs 9 or more cards to come back after 8 picks.
         p1p2 = (
             '[UnityCrossThreadLogger]Draft.Notify {"draftId":"1","SelfPick":2,"SelfPack":1,'
-            '"PackCards":"101,102,103,105,104"}\n'
+            '"PackCards":"101,102,103,105,104,106,107,108,109"}\n'
         )
         with open(log, "a") as f:
             f.write(p1p2)

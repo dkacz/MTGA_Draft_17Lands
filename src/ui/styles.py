@@ -7,6 +7,10 @@ without cross-polluting the state.
 
 import tkinter
 import ttkbootstrap as ttk
+
+# ttkbootstrap 2 makes bootstyle support on standard Tk widgets opt-in.
+# Enable it here so every UI entry point retains the existing widget API.
+ttk.enable_global_api()
 from ttkbootstrap.constants import *
 import sys
 import os
@@ -291,8 +295,12 @@ class Theme:
 
                 cls.BG_PRIMARY = sys_bg if sys_bg else colors.bg
 
-                # Ensure zebra striping uses a highly subtle background tint
-                if getattr(style.theme, "type", "dark") == "light":
+                # Ensure zebra striping uses a highly subtle background tint.
+                # ttkbootstrap 2 calls it `mode`; `type` is the deprecated name.
+                mode = getattr(style.theme, "mode", None) or getattr(
+                    style.theme, "type", "dark"
+                )
+                if mode == "light":
                     cls.BG_SECONDARY = colors.light
                 else:
                     cls.BG_SECONDARY = colors.dark

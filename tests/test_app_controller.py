@@ -28,6 +28,7 @@ class TestAppController:
         scanner.retrieve_current_missing_cards.return_value = []
         scanner.retrieve_current_picked_cards.return_value = []
         scanner.retrieve_draft_history.return_value = []
+        scanner.number_of_players = 8
 
         orchestrator = MagicMock()
         orchestrator.scanner = scanner
@@ -138,3 +139,45 @@ class TestAppController:
 
         # It SHOULD have rescheduled itself to try again in 100ms
         mock_app.root.after.assert_called_once_with(100, controller.refresh_ui_data)
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_refresh_ui_data_respects_advisor_toggle(self, mock_app, enabled):
+        """With the Advisor turned off, no recommendations are computed or shown."""
+        mock_app.configuration.settings.advisor_enabled = enabled
+        mock_app.overlay_window = None
+        controller = AppController(mock_app)
+
+        with patch("src.ui.app_controller.DraftAdvisor") as mock_advisor, patch(
+            "src.ui.app_controller.filter_options", return_value=["All Decks"]
+        ), patch("src.ui.app_controller.get_deck_metrics"):
+            mock_advisor.return_value.evaluate_pack.return_value = ["rec"]
+            controller.refresh_ui_data()
+
+        assert mock_advisor.called is enabled
+        expected = ["rec"] if enabled else []
+        mock_app.dashboard.update_recommendations.assert_called_once_with(expected)
+
+    @pytest.mark.parametrize("cards_per_pick,number_of_players", [(1, 8), (2, 4), (1, 6)])
+    def test_refresh_ui_data_tells_the_advisor_cards_per_pick(
+        self, mock_app, cards_per_pick, number_of_players
+    ):
+        """Pick-Two drafts take two cards a pick, and the advisor is told so."""
+        mock_app.configuration.settings.advisor_enabled = True
+        mock_app.overlay_window = None
+        mock_app.orchestrator.scanner.cards_per_pick = cards_per_pick
+        mock_app.orchestrator.scanner.number_of_players = number_of_players
+        controller = AppController(mock_app)
+
+        with patch("src.ui.app_controller.DraftAdvisor") as mock_advisor, patch(
+            "src.ui.app_controller.filter_options", return_value=["All Decks"]
+        ), patch("src.ui.app_controller.get_deck_metrics"):
+            mock_advisor.return_value.evaluate_pack.return_value = []
+            controller.refresh_ui_data()
+
+        # With no draft history, progress falls back to three 15-card boosters,
+        # counted in picks: 45 picks, or 24 when each pick takes two cards.
+        mock_advisor.return_value.evaluate_pack.assert_called_once_with(
+            [], 1, current_pack=1, cards_per_pick=cards_per_pick,
+            number_of_players=number_of_players,
+            picks_completed=0, total_picks=45 if cards_per_pick == 1 else 24,
+        )

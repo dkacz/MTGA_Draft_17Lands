@@ -1,8 +1,8 @@
 import pytest
 
 from src.advisor.card_features import (
-    get_color_requirements, get_main_cmc, get_main_colors, get_main_mana_cost,
-    get_main_text, get_main_types, get_mana_colors, is_on_color,
+    get_main_cmc, get_main_colors, get_main_mana_cost,
+    get_main_text, get_main_types, get_mana_colors, get_off_color_requirements, is_on_color,
     get_own_token_creation_text,
 )
 
@@ -42,7 +42,7 @@ def test_optional_prepared_spell_does_not_change_primary_characteristics():
 def test_hybrid_colors_are_an_inventory_not_a_joint_requirement():
     card = {"colors": ["B", "R"], "mana_cost": "{B/R}{B/R}"}
     assert get_mana_colors(card) == ["B", "R"]
-    assert get_color_requirements(card) == [("B", "R"), ("B", "R")]
+    assert get_off_color_requirements(card, ["G"]) == (frozenset("BR"), frozenset("BR"))
     assert is_on_color(card, ["R"])
 
 

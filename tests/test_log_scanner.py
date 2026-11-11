@@ -6,6 +6,7 @@ Test suite for the ArenaScanner class logic.
 import pytest
 import os
 from unittest.mock import patch, MagicMock
+from src import constants
 from src.log_scanner import ArenaScanner
 from tests.test_log_scanner_data import (
     TEST_SETS,
@@ -536,3 +537,111 @@ def test_scanner_color_win_rate_hides_zero_percent_pairs():
         "WU",
     }
     assert "WU (57.2%)" in offered
+
+
+# Arena's "Y26_FRA_Bot_Draft_<date>" event names split on "_" into "Bot" and
+# "Draft": neither matches a known type, so they used to fall through to the
+# human PremierDraft catch-all and the bot-draft log messages were never read.
+FRA_BOT_DRAFT_EVENT = r'[UnityCrossThreadLogger]==> EventJoin {"id":"450a2b19-8439-46ab-98e8-668b70e5bc12","request":"{\"EventName\":\"Y26_FRA_Bot_Draft_20261017\",\"EntryCurrencyType\":\"None\",\"EntryCurrencyPaid\":0,\"CustomTokenId\":null,\"EventChoice\":\"\",\"DebugIgnoreEntryLimits\":false}"}'
+FRA_BOT_DRAFT_STATUS_P1P1 = r'{"CurrentModule":"BotDraft","Payload":"{\"Result\":\"Success\",\"EventName\":\"Y26_FRA_Bot_Draft_20261017\",\"DraftStatus\":\"PickNext\",\"PackNumber\":0,\"PickNumber\":0,\"NumCardsToPick\":1,\"DraftPack\":[\"106360\",\"106259\",\"106355\",\"106272\",\"106237\"],\"PackStyles\":[],\"PickedCards\":[],\"PickedStyles\":[]}"}'
+FRA_BOT_DRAFT_STATUS_P1P2 = r'{"CurrentModule":"BotDraft","Payload":"{\"Result\":\"Success\",\"EventName\":\"Y26_FRA_Bot_Draft_20261017\",\"DraftStatus\":\"PickNext\",\"PackNumber\":0,\"PickNumber\":1,\"NumCardsToPick\":1,\"DraftPack\":[\"106237\",\"106252\",\"106418\"],\"PackStyles\":[],\"PickedCards\":[\"106259\"],\"PickedStyles\":[]}"}'
+
+
+def test_bot_draft_event_name_is_quick_draft(function_scanner):
+    with open(TEST_LOG_FILE_LOCATION, "a", encoding="utf-8") as log_file:
+        log_file.write(FRA_BOT_DRAFT_EVENT + "\n")
+
+    assert function_scanner.draft_start_search()
+    assert function_scanner.retrieve_current_limited_event() == ("FRA", "QuickDraft")
+
+
+def test_bot_draft_event_name_reads_pack_and_pick(function_scanner):
+    def append(*lines):
+        with open(TEST_LOG_FILE_LOCATION, "a", encoding="utf-8") as log_file:
+            log_file.write("\n".join(lines) + "\n")
+
+    append(FRA_BOT_DRAFT_EVENT)
+    assert function_scanner.draft_start_search()
+
+    append(FRA_BOT_DRAFT_STATUS_P1P1)
+    assert function_scanner.draft_data_search()
+    assert function_scanner.retrieve_current_pack_and_pick() == (1, 1)
+
+    append(
+        r'[UnityCrossThreadLogger]==> BotDraftDraftPick {"id":"5d026cdb-91bd-4bbf-bcbf-4ef734670c3e","request":"{\"EventName\":\"Y26_FRA_Bot_Draft_20261017\",\"PickInfo\":{\"EventName\":\"Y26_FRA_Bot_Draft_20261017\",\"CardIds\":[\"106259\"],\"PackNumber\":0,\"PickNumber\":0}}"}',
+        FRA_BOT_DRAFT_STATUS_P1P2,
+    )
+    assert function_scanner.draft_data_search()
+    assert function_scanner.retrieve_current_pack_and_pick() == (1, 2)
+    assert function_scanner.taken_cards == ["106259"]
+
+
+def test_mislabelled_pick_two_draft_keeps_first_pack():
+    """A Pick-Two draft logged under a standard event name is switched to
+    Pick-Two on its first two-card pick. The P1P1 pack recorded before the
+    switch must survive, or the P1P5 wheel shows no missing cards."""
+    if os.path.exists(TEST_LOG_FILE_LOCATION):
+        os.remove(TEST_LOG_FILE_LOCATION)
+    scanner = ArenaScanner(
+        TEST_LOG_FILE_LOCATION,
+        TEST_SETS,
+        sets_location=TEST_LOG_DIRECTORY,
+        retrieve_unknown=True,
+    )
+    scanner.log_enable(False)
+    try:
+        for entry_label, expected, entry_string in OM1_PICK_TWO_PREMIER_DRAFT_ENTRIES:
+            with open(TEST_LOG_FILE_LOCATION, "a", encoding="utf-8") as log_file:
+                log_file.write(
+                    entry_string.replace("PickTwoDraft_OM1", "PremierDraft_OM1") + "\n"
+                )
+            scanner.draft_start_search()
+            scanner.draft_data_search()
+
+            assert scanner.retrieve_current_pack_and_pick() == (
+                expected.current_pack,
+                expected.current_pick,
+            ), entry_label
+            assert [
+                x["name"] for x in scanner.retrieve_current_pack_cards()
+            ] == expected.pack, entry_label
+            assert [
+                x["name"] for x in scanner.retrieve_taken_cards()
+            ] == expected.card_pool, entry_label
+            assert [
+                x["name"] for x in scanner.retrieve_current_missing_cards()
+            ] == expected.missing, entry_label
+
+        assert scanner.draft_type == constants.LIMITED_TYPE_DRAFT_PICK_TWO
+    finally:
+        if os.path.exists(TEST_LOG_FILE_LOCATION):
+            os.remove(TEST_LOG_FILE_LOCATION)
+
+
+OTJ_QUICK_DRAFT_PICK_P1P9 = r'[UnityCrossThreadLogger]==> BotDraft_DraftPick {"id":"3b1f0c52-7d0e-4c1a-9a0e-2f6c1d8e4b17","request":"{\"Type\":1801,\"TransId\":\"3b1f0c52-7d0e-4c1a-9a0e-2f6c1d8e4b17\",\"Payload\":\"{\\\"EventName\\\":\\\"QuickDraft_OTJ_20240426\\\",\\\"PickInfo\\\":{\\\"EventName\\\":\\\"QuickDraft_OTJ_20240426\\\",\\\"CardId\\\":\\\"90627\\\",\\\"PackNumber\\\":0,\\\"PickNumber\\\":8}}\"}"}'
+
+
+def test_quick_draft_pick_after_picked_cards_resync_counts_once(function_scanner):
+    """When the log is missing picks 2-8, the pool is restored from the P1P9
+    PickedCards list. The P1P9 pick lands in slot 0 and must be added once."""
+    entries = {label: line for label, _, line in OTJ_QUICK_DRAFT_ENTRIES}
+
+    def append(*lines):
+        with open(TEST_LOG_FILE_LOCATION, "a", encoding="utf-8") as log_file:
+            log_file.write("\n".join(lines) + "\n")
+
+    append(entries["Event Start"])
+    assert function_scanner.draft_start_search()
+
+    append(entries["P1P1 - Pack"], entries["P1P1 - Pick"], entries["P1P2 - Pack"])
+    assert function_scanner.draft_data_search()
+    assert function_scanner.taken_cards == ["90428"]
+
+    append(entries["P1P9 - Pack"])
+    assert function_scanner.draft_data_search()
+    restored = list(function_scanner.taken_cards)
+    assert len(restored) == 8
+
+    append(OTJ_QUICK_DRAFT_PICK_P1P9)
+    assert function_scanner.draft_data_search()
+    assert function_scanner.taken_cards == restored + ["90627"]

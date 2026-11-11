@@ -9,8 +9,8 @@ import numpy as np
 
 from src import constants
 from src.advisor.card_features import (
-    get_main_cmc, get_main_types, get_main_mana_cost, get_main_text,
-    get_mana_colors, get_own_token_creation_text, is_on_color,
+    get_main_cmc, get_main_types, get_main_text, get_mana_colors,
+    get_off_color_requirements, get_own_token_creation_text, is_on_color,
 )
 from src.advisor.card_quality import (
     blended_win_rate, observed_win_rate, sample_count, stats_for,
@@ -83,15 +83,23 @@ class DraftAdvisor:
         self.fixing_map = count_fixing(self.fixing_pool)
         self.pool_metrics = self._analyze_pool()
 
-    def evaluate_pack(self, pack_cards, current_pick, current_pack=1, *, picks_completed=None, total_picks=None):
+    def evaluate_pack(self, pack_cards, current_pick, current_pack=1, cards_per_pick=1,
+                      number_of_players=8, *, picks_completed=None, total_picks=None):
+        """Score a pack. picks_completed and total_picks count picks, as Arena does.
+
+        Draft progress counts cards taken, not picks: a Pick-Two pick takes
+        cards_per_pick cards, so its pick N counts as pick 2N-1 of a normal
+        draft. Without picks_completed, the pool size already counts cards.
+        """
         if not pack_cards:
             return []
         pick = max(1, int(current_pick))
         pack = max(1, int(current_pack))
+        per_pick = max(1, int(cards_per_pick or 1))
         if picks_completed is not None:
-            self.picks_completed = max(0, int(picks_completed))
+            self.picks_completed = max(0, int(picks_completed)) * per_pick
         if total_picks is not None:
-            self.total_picks = max(1, int(total_picks))
+            self.total_picks = max(1, int(total_picks) * per_pick)
         self._refresh_core()
         ranks = {str(c.get("name", "Unknown")): i for i, c in enumerate(
             sorted(pack_cards, key=self._observed, reverse=True)
@@ -116,7 +124,9 @@ class DraftAdvisor:
                     if signal > 10.0:
                         role_bonus += min(2.0, signal / 20.0)
                         reasons.append("Open-color signal (small tie-breaker)")
-                _, _, wheel_pct = self._check_relative_wheel(card, pick, ranks.get(name, 99))
+                _, _, wheel_pct = self._check_relative_wheel(
+                    card, pick, ranks.get(name, 99), len(pack_cards), per_pick, number_of_players,
+                )
                 if wheel_pct >= 75.0:
                     reasons.append(f"Wheel estimate ~{wheel_pct:.0f}% (heuristic)")
                 samples = sample_count(stats_for(card))
@@ -215,7 +225,8 @@ class DraftAdvisor:
                 continue
             off_color += wr >= self.global_mean - self.global_std
             if (wr - self.global_mean) / self.global_std >= self.BOMB_Z_SCORE:
-                targets.update(c for c in get_mana_colors(card) if c not in self.main_colors)
+                for options in get_off_color_requirements(card, self.main_colors):
+                    targets.update(options)
         result["off_color_playables"] = off_color
         result["splash_targets"] = targets
         return result
@@ -289,16 +300,11 @@ class DraftAdvisor:
         lane = self.main_colors[:2]
         if lane and "Land" in get_main_types(card):
             return self._land_fit(card, pack)
-        if not lane or is_on_color(card, lane):
+        # One entry per colored symbol the lane cannot pay, holding the colors
+        # that can pay it (shared hybrid rules in src.mana_cost).
+        pips = get_off_color_requirements(card, lane) if lane else ()
+        if not pips:
             return 1.0, ""
-        cost = get_main_mana_cost(card)
-        pips = []
-        for pip in re.findall(r"\{(.*?)\}", cost):
-            options = [c for c in pip.split("/") if c in constants.CARD_COLORS]
-            if options and not any(c in lane for c in options) and "P" not in pip.split("/") and "2" not in pip.split("/"):
-                pips.append(options)
-        if not cost:
-            pips = [[c] for c in get_mana_colors(card) if c not in lane]
         if pack == 1:
             optionality = max(0.4, 1.0 - max(0, self.picks_completed - 7) * 0.05)
             return max(0.2, optionality - (0.2 if len(pips) > 1 else 0.0)), "Outside current colors"
@@ -349,8 +355,14 @@ class DraftAdvisor:
             return self.main_archetype
         return "Splash/Speculative"
 
-    def _check_relative_wheel(self, card, pick, rank_in_pack):
-        if pick >= 9:
+    def _check_relative_wheel(self, card, pick, rank_in_pack, pack_size=None,
+                              cards_per_pick=1, number_of_players=8):
+        # The ALSA curves assume eight players taking one card a pick, so
+        # Pick-Two and other pod sizes get no percentage. A pack returns after
+        # 8 picks, so it can come back only if it holds 9 or more cards now.
+        if cards_per_pick != 1 or number_of_players != 8:
+            return 1.0, "", 0.0
+        if pick >= 9 or (pack_size is not None and pack_size < 9):
             return 1.0, "", 0.0
         try:
             alsa = float(stats_for(card).get("alsa") or 0.0)

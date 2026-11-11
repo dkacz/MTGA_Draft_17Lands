@@ -7,17 +7,15 @@ import itertools
 import re
 from src import constants
 from src.advisor.card_features import (
-    get_color_requirements,
-    get_main_cmc,
     get_main_colors,
     get_main_face,
-    get_main_mana_cost,
     get_main_text,
     get_main_types,
     get_mana_colors,
     get_own_token_creation_text,
     is_on_color,
 )
+from src.mana_cost import assign_mana_colors, mana_color_demand
 
 
 def _has_mana_spending_restriction(text):
@@ -49,7 +47,6 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
         {c: 0 for c in constants.CARD_COLORS},
     )
     lowest_cmc = {c: 99 for c in constants.CARD_COLORS}
-    hybrid_pips = []
 
     analyzer = ManaSourceAnalyzer(spells + non_basic_lands)
     existing_sources = analyzer.sources
@@ -57,29 +54,14 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
     any_color_spells = analyzer.any_color_spell_sources
     any_color_enabler_pips = analyzer.any_color_enabler_pips
 
-    for card in spells:
+    for card, assigned in zip(spells, assign_mana_colors(spells, colors)):
         copies = card.get("count", 1)
-        cost = get_main_mana_cost(card)
-        cmc = int(get_main_cmc(card) or 99)
+        cost, cmc = card.get("mana_cost", ""), int(card.get("cmc", 99) or 99)
 
         if cost:
             card_color_pips = {c: 0 for c in constants.CARD_COLORS}
-            card_hybrid_pips = []
-            for opts in get_color_requirements(card):
-                valid_opts = [
-                    opt
-                    for opt in opts
-                    if opt in constants.CARD_COLORS and opt in colors
-                ]
-                if not valid_opts:
-                    valid_opts = [opt for opt in opts if opt in constants.CARD_COLORS]
-
-                if len(valid_opts) == 1:
-                    card_color_pips[valid_opts[0]] += 1
-                elif len(valid_opts) > 1:
-                    card_hybrid_pips.append((valid_opts, cmc))
-
-            hybrid_pips.extend(card_hybrid_pips * copies)
+            for color in assigned:
+                card_color_pips[color] += 1
             for c, count in card_color_pips.items():
                 if count > 0:
                     strict_pips[c] += count * copies
@@ -88,20 +70,11 @@ def calculate_dynamic_mana_base(spells, non_basic_lands, colors, forced_count=17
                     if cmc < lowest_cmc[c]:
                         lowest_cmc[c] = cmc
         else:
-            for c in get_main_colors(card):
+            for c in card.get("colors", []):
                 if c in colors:
                     strict_pips[c] += copies
                     max_pip_in_single_card[c] = max(1, max_pip_in_single_card[c])
                     lowest_cmc[c] = min(cmc, lowest_cmc[c])
-
-    for opts, cmc in hybrid_pips:
-        valid_opts = [opt for opt in opts if opt in colors]
-        if not valid_opts:
-            valid_opts = opts
-        best_opt = max(valid_opts, key=lambda o: strict_pips[o])
-        strict_pips[best_opt] += 1
-        max_pip_in_single_card[best_opt] = max(1, max_pip_in_single_card[best_opt])
-        lowest_cmc[best_opt] = min(cmc, lowest_cmc[best_opt])
 
     # Cover every color the deck actually pips, not just the declared ones —
     # splash/hybrid spells outside the declared colors still need sources.
@@ -233,27 +206,28 @@ def create_basic_lands(color, count):
 
 
 def is_castable(card, colors, strict=True):
+    """Color feasibility, not proof of sufficient sources or mana this turn."""
+    card_colors, mana_cost = card.get("colors", []), card.get("mana_cost", "")
+    if not card_colors and not mana_cost:
+        return True
     if strict:
+        # The primary card's cost under the shared rules in src.mana_cost.
         return is_on_color(card, colors)
-    card_colors = get_mana_colors(card)
-    return not card_colors or any(c in colors for c in card_colors)
+    else:
+        return any(c in colors for c in card_colors)
 
 
 class ManaSourceAnalyzer:
-    def __init__(self, pool, suppress_artifact_token_mana=None):
+    def __init__(self, pool):
         self.pool = pool
         # A deck-pool has no battlefield timing. Conservatively do not promise
         # mana from future artifact tokens when the verified replacement turns
         # them into Dragons; already-existing token records remain sources.
-        self.suppresses_artifact_token_mana = (
-            suppress_artifact_token_mana
-            if suppress_artifact_token_mana is not None
-            else any(re.search(
-                r"(?:artifact tokens would be created\b|you would create\b[^.]*\bartifact tokens\b)"
-                r"[^.]*\bdragon(?: creature)? tokens\b[^.]*\binstead\b",
-                get_main_text(card).lower(),
-            ) for card in pool)
-        )
+        self.suppresses_artifact_token_mana = any(re.search(
+            r"(?:artifact tokens would be created\b|you would create\b[^.]*\bartifact tokens\b)"
+            r"[^.]*\bdragon(?: creature)? tokens\b[^.]*\binstead\b",
+            get_main_text(card).lower(),
+        ) for card in pool)
         self.sources = {c: 0 for c in constants.CARD_COLORS}
         # Lands that produce any color are dependable sources; spells that fix
         # (Treasure makers, dorks) are transient and must be discounted by the
@@ -262,9 +236,6 @@ class ManaSourceAnalyzer:
         self.any_color_spell_sources = 0
         self.any_color_enabler_pips = {c: 0 for c in constants.CARD_COLORS}
         self.total_fixing_cards = 0
-        # Nonland cards with evidenced lasting mana acceleration. This is a
-        # card count, not an estimate of when or how much mana becomes available.
-        self.persistent_ramp_count = 0
         for card in self.pool:
             self._evaluate(card)
 
@@ -364,16 +335,6 @@ class ManaSourceAnalyzer:
                 if not (self.suppresses_artifact_token_mana
                         and "Artifact" in get_main_types(token))
             )
-        if not is_land:
-            permanent_mana = any(
-                re.search(r"\{t\}[^.\n]*:\s*add\b", line) and "sacrifice" not in line
-                for rules in evidence for line in rules.splitlines()
-            )
-            land_ramp = re.search(
-                r"\b(?:search|put)\b[^.]*\bland\b[^.]*\bonto the battlefield\b", text
-            )
-            if permanent_mana or land_ramp:
-                self.persistent_ramp_count += count
         for rules in evidence:
             # Only inspect symbols after "add", not the ability's activation
             # cost or symbols in unrelated damage/payment instructions.
@@ -428,20 +389,8 @@ def count_fixing(pool):
 
 
 def get_strict_colors(spells):
-    pips, hybrid_pips_list = {c: 0 for c in constants.CARD_COLORS}, []
-    for card in spells:
-        for options in get_color_requirements(card):
-            if len(options) == 1:
-                pips[options[0]] += 1
-            else:
-                hybrid_pips_list.append(options)
-
-    strict_colors = {c for c, p in pips.items() if p > 0}
-    for options in hybrid_pips_list:
-        if not any(opt in strict_colors for opt in options):
-            strict_colors.add(options[0])
-
-    return [c for c in constants.CARD_COLORS if c in strict_colors]
+    pips = mana_color_demand(spells)
+    return [c for c in constants.CARD_COLORS if pips[c] > 0]
 
 
 def select_useful_lands(pool, target_colors, metrics=None):
@@ -453,13 +402,17 @@ def select_useful_lands(pool, target_colors, metrics=None):
             baseline_wr = b
 
     for card in pool:
-        name, types = card.get("name", ""), get_main_types(card)
+        name, types = card.get("name", ""), card.get("types", [])
         if name in constants.BASIC_LANDS or "Land" not in types or "Basic" in types:
             continue
 
-        analyzer = ManaSourceAnalyzer([card])
-        card_colors = [c for c in constants.CARD_COLORS if analyzer.sources[c]]
-        is_universal = analyzer.any_color_sources > 0
+        text, card_colors = (
+            str(card.get("oracle_text", card.get("text", ""))).lower(),
+            card.get("colors", []),
+        )
+        is_universal = any(
+            phrase in text for phrase in constants.FIXING_KEYWORDS
+        ) or any(fn in name.lower() for fn in constants.FIXING_NAMES)
         gihwr = float(
             card.get("deck_colors", {}).get("All Decks", {}).get("gihwr", 0.0)
         )
@@ -475,7 +428,8 @@ def select_useful_lands(pool, target_colors, metrics=None):
     colorless_lands = [
         c
         for c in useful_lands
-        if not any(count_fixing([c]).values())
+        if not c.get("colors")
+        and not any(fn in c.get("name", "").lower() for fn in constants.FIXING_NAMES)
     ]
     if len(colorless_lands) > 2:
         colorless_lands.sort(
