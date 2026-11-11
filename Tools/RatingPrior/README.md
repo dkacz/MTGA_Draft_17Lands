@@ -133,25 +133,34 @@ python Tools/RatingPrior/build_training_data.py --data DATA_DIR --jobs 6 LCI MKM
 
 The tool reads the 17Lands public data (CC BY 4.0)
 `DATA_DIR/17lands_public/{game,draft}_data_public.<SET>.PremierDraft.csv.gz`
-and `DATA_DIR/ratings/<SET>.csv`, and writes the table from which a later
+and `DATA_DIR/17lands_public/cards.csv`, which
+`https://www.17lands.com/public_datasets` links as
+`https://17lands-public.s3.amazonaws.com/analysis_data/cards/cards.csv`, and
+`DATA_DIR/ratings/<SET>.csv`. It writes the table from which a later
 model learns how much each signal is worth in the first days of a set. Both
 files are streamed, so memory stays small, and `--jobs` builds several sets at
 the same time.
 
 The release is the earliest `draft_time` in the game data. A snapshot at day
-`d` (0, 1, 2, 3 and 7) counts the drafts and games with `draft_time` before
-release + `d` days, so day 0 has no data. The target counts the games drafted
-from 7 to 56 days after the release, that is on days 8 to 56, or up to the end
-of the public data when that comes sooner.
+`d` (0, 1, 2, 3 and 7) counts what 17Lands could show at release + `d` days:
+the drafts with `draft_time` before that moment and the games with
+`game_time` before it, so day 0 has no data. The target counts the games
+drafted from 7 to 31 days after the release, that is on days 8 to 31. When the
+game data ends before day 31, as for FRA, `target_window_incomplete` is `true`
+and every target column is empty, so the set serves only for the features.
 
-`DATA_DIR/features/<SET>.csv` has one row per card and snapshot. `set_drafts`
+`DATA_DIR/features/<SET>.csv` has one row per card and snapshot.
+`color_identity` is the card's color identity from `cards.csv` in WUBRG order,
+`C` for a colorless card, from the set's own printing or, for a card from a
+bonus sheet, from the printing of its own expansion. `cards.csv` has no mana
+cost, so a color that appears only in the rules text counts too. `set_drafts`
 and `set_games` count the set's drafts and games in the snapshot. `alsa` and
 `ata` are averaged over `alsa_seen` copies seen and `ata_picked` picks, and
 `drafts_seen` and `drafts_picked` count the drafts that saw or picked the card.
 `gih_games` and `gih_wr_raw` are the card's games in hand and GIH WR in the
 snapshot, and `gih_wr` is the value that 17Lands would show, empty below 500
 games in hand. `target_gih_games` and `target_gih_wr` are the same over the
-target window. `authors` and `authors_sources` are the reviewers' score of
+target window, and `target_window_incomplete` says whether they are missing. `authors` and `authors_sources` are the reviewers' score of
 `build_prior.py` and the number of sources behind it, and `authors_<source>`
 is one source's normal score.
 
@@ -162,7 +171,7 @@ decks whose `main_colors` are that pair, whatever the splash, and
 `gih_games`, `gih_wr_raw` and `gih_wr` are the card's games in hand and GIH WR
 in decks of the pair. The `target_` columns give the same over the target
 window, and `target_all_gih_games` and `target_all_gih_wr` the card's GIH WR
-over all decks.
+over all decks. Card colors are in `<SET>.csv`.
 
 The definitions follow 17Lands. A game is in hand when the card was in the
 opening hand or drawn, and a card only tutored does not count. ATA is the mean

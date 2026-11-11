@@ -71,76 +71,117 @@ def test_alsa_counts_each_copy_at_the_last_sight_of_its_pack():
     assert acc["anomalies"]["first sight of a pack missing"] == 6 + 7
 
 
-def test_build_set_writes_snapshots_and_targets(tmp_path, monkeypatch):
-    monkeypatch.setattr(btd, "PUBLISH_MIN_GAMES", 2)
-    data = tmp_path / "data"
-    (data / "17lands_public").mkdir(parents=True)
-    (data / "ratings").mkdir()
-    game_path, draft_path = btd.data_paths(data, "XYZ")
-
-    game_header = ["expansion", "draft_id", "draft_time", "main_colors", "splash_colors", "won"]
+def write_set(data, code, games):
+    """Writes a set's game data, one draft file and a ratings table. games:
+    (draft day, played day, main colors, won, {card: (opening, drawn, tutored)})."""
+    (data / "17lands_public").mkdir(parents=True, exist_ok=True)
+    (data / "ratings").mkdir(exist_ok=True)
+    game_path, draft_path = btd.data_paths(data, code)
+    game_header = ["expansion", "draft_id", "draft_time", "game_time", "main_colors", "splash_colors", "won"]
     for name in CARDS:
         game_header += [f"opening_hand_{name}", f"drawn_{name}", f"tutored_{name}", f"deck_{name}"]
-
-    def game(days, colors, won, hands):
+    rows = []
+    for drafted, played, colors, won, hands in games:
         counts = []
         for name in CARDS:
             opening, drawn, tutored = hands.get(name, (0, 0, 0))
             counts += [opening, drawn, tutored, 1]
-        return ["XYZ", f"g{days}", at(days), colors, "", str(won)] + counts
-
-    write_gz(game_path, game_header, [
-        game(0, "WU", True, {"Alpha": (1, 0, 0)}),
-        game(1.5, "BW", False, {"Alpha": (0, 2, 0)}),
-        game(5, "UR", True, {"Beta, the Second": (0, 0, 1)}),
-        game(10, "WU", True, {"Alpha": (0, 1, 0), "Beta, the Second": (1, 0, 0)}),
-        game(20, "WUB", False, {"Alpha": (1, 1, 0)}),
-        game(60, "WU", True, {"Alpha": (1, 0, 0)}),
-    ])
+        rows.append([code, f"g{drafted}", at(drafted), at(played), colors, "", str(won)] + counts)
+    write_gz(game_path, game_header, rows)
     draft_header = ["expansion", "draft_id", "draft_time", "pack_number", "pick_number", "pick", "pick_2"]
     draft_header += [f"pack_card_{name}" for name in CARDS] + [f"pool_{name}" for name in CARDS]
     write_gz(draft_path, draft_header, [
-        ["XYZ", "d1", at(0.5), 0, 0, "Beta, the Second", "", 1, 1, 1, 0, 0, 0],
-        ["XYZ", "d1", at(0.5), 0, 1, "Alpha", "", 1, 0, 1, 0, 1, 0],
-        ["XYZ", "d2", at(3.5), 0, 0, "Alpha", "", 1, 0, 0, 0, 0, 0],
+        [code, "d1", at(0.5), 0, 0, "Beta, the Second", "", 1, 1, 1, 0, 0, 0],
+        [code, "d1", at(0.5), 0, 1, "Alpha", "", 1, 0, 1, 0, 1, 0],
+        [code, "d2", at(3.5), 0, 0, "Alpha", "", 1, 0, 0, 0, 0, 0],
     ])
-    with open(data / "ratings" / "XYZ.csv", "w", newline="", encoding="utf-8") as f:
+    with open(data / "ratings" / f"{code}.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["set", "card_name", "source", "list_name", "grade_raw", "grade_value", "published_at", "before_release"])
-        writer.writerow(["XYZ", "Alpha", "draftsim", "Quinn", "8/10", "8", "", "true"])
-        writer.writerow(["XYZ", "Beta, the Second", "draftsim", "Quinn", "3/10", "3", "", "true"])
+        writer.writerow([code, "Alpha", "draftsim", "Quinn", "8/10", "8", "", "true"])
+        writer.writerow([code, "Beta, the Second", "draftsim", "Quinn", "3/10", "3", "", "true"])
+    with open(data / "17lands_public" / "cards.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "expansion", "name", "rarity", "color_identity", "mana_value", "types", "is_booster"])
+        writer.writerow([1, "OLD", "Alpha", "common", "R", 2, "Creature", "True"])
+        writer.writerow([2, code, "Alpha", "common", "UW", 2, "Creature", "True"])
+        # A card from a bonus sheet is listed under its own expansion.
+        writer.writerow([3, "BON", "Beta, the Second", "rare", "", 3, "Artifact", "True"])
+
+
+def read_rows(path, *keys):
+    with open(path, newline="", encoding="utf-8") as f:
+        return {tuple(r[k] for k in keys): r for r in csv.DictReader(f)}
+
+
+GAMES = [
+    (0, 0.1, "WU", True, {"Alpha": (1, 0, 0)}),
+    # Drafted on day 1 and played on day 2: the day 1 snapshot cannot show it.
+    (0.9, 1.2, "BW", False, {"Alpha": (0, 2, 0)}),
+    (5, 5.1, "UR", True, {"Beta, the Second": (0, 0, 1)}),
+    # Played after the day 7 snapshot and drafted before the target window.
+    (6.5, 7.5, "WU", True, {"Alpha": (1, 0, 0)}),
+    (10, 10, "WU", True, {"Alpha": (0, 1, 0), "Beta, the Second": (1, 0, 0)}),
+    (20, 20, "WUB", False, {"Alpha": (1, 1, 0)}),
+    (40, 40, "WU", True, {"Alpha": (1, 0, 0)}),
+]
+
+
+def test_build_set_writes_snapshots_and_targets(tmp_path, monkeypatch):
+    monkeypatch.setattr(btd, "PUBLISH_MIN_GAMES", 2)
+    data = tmp_path / "data"
+    write_set(data, "XYZ", GAMES)
 
     summary = btd.build_set("XYZ", data)
     assert summary["release"] == at(0)
-    assert summary["games"] == 5 and summary["drafts"] == 2
+    assert summary["games"] == 7 and summary["drafts"] == 2
+    assert summary["target_window_incomplete"] is False and summary["cards_without_colors"] == []
 
-    with open(data / "features" / "XYZ.csv", newline="", encoding="utf-8") as f:
-        rows = {(r["card_name"], int(r["snapshot_day"])): r for r in csv.DictReader(f)}
+    rows = read_rows(data / "features" / "XYZ.csv", "card_name", "snapshot_day")
     assert {name for name, _ in rows} == {"Alpha", "Beta, the Second"}
-    alpha = {d: rows[("Alpha", d)] for d in btd.SNAPSHOT_DAYS}
+    alpha = {d: rows[("Alpha", str(d))] for d in btd.SNAPSHOT_DAYS}
+    beta = rows[("Beta, the Second", "7")]
+    assert alpha[0]["color_identity"] == "WU" and beta["color_identity"] == "C"
+    # Snapshots count the games played before release + d days.
     assert [alpha[d]["gih_games"] for d in btd.SNAPSHOT_DAYS] == ["0", "1", "2", "2", "2"]
     assert alpha[1]["gih_wr_raw"] == "100.0000" and alpha[1]["gih_wr"] == ""
     assert alpha[2]["gih_wr"] == "50.0000"
     assert [alpha[d]["set_games"] for d in btd.SNAPSHOT_DAYS] == ["0", "1", "2", "2", "3"]
-    # The target counts days 7 to 56: the games on days 10 and 20, not day 60.
+    # The target counts the games drafted on days 8 to 31: days 10 and 20.
+    assert alpha[0]["target_window_incomplete"] == "false"
     assert alpha[0]["target_gih_games"] == "2" and alpha[0]["target_gih_wr"] == "50.0000"
     # A tutored card is not in hand.
-    beta = rows[("Beta, the Second", 7)]
     assert beta["gih_games"] == "0" and beta["target_gih_games"] == "1"
     assert alpha[1]["alsa"] == "1.5000" and alpha[1]["ata"] == "2.0000"
     assert alpha[7]["alsa"] == "1.3333" and alpha[7]["ata_picked"] == "2"
     assert alpha[7]["set_drafts"] == "2" and alpha[1]["drafts_seen"] == "1"
-    assert rows[("Beta, the Second", 1)]["ata"] == "1.0000"
+    assert rows[("Beta, the Second", "1")]["ata"] == "1.0000"
     assert float(alpha[0]["authors"]) > 0 > float(beta["authors"])
     assert alpha[0]["authors_draftsim"] != "" and alpha[0]["authors_cfb"] == ""
 
-    with open(data / "features" / "XYZ_pairs.csv", newline="", encoding="utf-8") as f:
-        pairs = {(r["card_name"], r["pair"], int(r["snapshot_day"])): r for r in csv.DictReader(f)}
+    pairs = read_rows(data / "features" / "XYZ_pairs.csv", "card_name", "pair", "snapshot_day")
     assert len(pairs) == 2 * len(btd.PAIRS) * len(btd.SNAPSHOT_DAYS)
-    wb = pairs[("Alpha", "WB", 2)]
+    wb = pairs[("Alpha", "WB", "2")]
     assert wb["gih_games"] == "1" and wb["gih_wr_raw"] == "0.0000"
     assert wb["pair_games"] == "1" and wb["two_color_games"] == "2" and wb["two_color_win_rate"] == "50.0000"
-    wu = pairs[("Alpha", "WU", 0)]
+    assert pairs[("Alpha", "WB", "1")]["pair_games"] == "0"
+    wu = pairs[("Alpha", "WU", "0")]
     assert wu["target_gih_games"] == "1" and wu["target_gih_wr"] == "100.0000"
     assert wu["target_pair_games"] == "1" and wu["target_two_color_games"] == "1"
     assert wu["target_all_gih_games"] == "2"
+
+
+def test_a_set_whose_data_ends_before_the_target_window_has_no_target(tmp_path):
+    data = tmp_path / "data"
+    write_set(data, "ABC", GAMES[:-1])
+
+    assert btd.build_set("ABC", data)["target_window_incomplete"] is True
+    rows = read_rows(data / "features" / "ABC.csv", "card_name", "snapshot_day")
+    alpha = rows[("Alpha", "7")]
+    assert alpha["target_window_incomplete"] == "true"
+    assert alpha["target_gih_games"] == "" and alpha["target_gih_wr"] == ""
+    assert alpha["gih_games"] == "2" and alpha["alsa"] == "1.3333"
+    pairs = read_rows(data / "features" / "ABC_pairs.csv", "card_name", "pair", "snapshot_day")
+    wu = pairs[("Alpha", "WU", "7")]
+    assert wu["target_window_incomplete"] == "true" and wu["pair_games"] == "1"
+    assert all(wu[k] == "" for k in btd.PAIR_COLUMNS if k.startswith("target_") and k != "target_window_incomplete")
