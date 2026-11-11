@@ -260,3 +260,26 @@ def test_visitor_needs_a_real_own_artifact_token_maker(mock_metrics):
     own_maker = card("Aerid", wr=60, text="Whenever you cast a spell, create a Heartwood token.")
     with_maker = DraftAdvisor(mock_metrics, [visitor, own_maker] + [card(wr=60) for _ in range(15)])
     assert with_maker._verified_synergy(visitor)[0] > 0
+
+
+@pytest.mark.parametrize("pack_size, wheels", [(8, False), (9, True)])
+def test_evaluate_pack_wheel_chance_uses_pack_size(mock_metrics, pack_size, wheels):
+    """Pick 7 of a 14-card pack (8 cards) can't wheel; pick 7 of 15 (9 cards) can."""
+    advisor = DraftAdvisor(mock_metrics, [])
+    pack = [dict(card(f"Filler{i}", wr=50), deck_colors={"All Decks": {"gihwr": 50.0, "alsa": 8.5}})
+            for i in range(pack_size)]
+    recs = advisor.evaluate_pack(pack, current_pick=7)
+    assert any(r.wheel_chance > 0 for r in recs) is wheels
+
+
+def test_pick_two_progress_counts_cards_taken(mock_metrics):
+    # Pick-Two pick 5 of pack 1 has taken eight cards, like pick 9 of a normal draft.
+    pool = [card(colors=[c], wr=60) for c in "WU" for _ in range(4)]
+    pack = [card("Off-color", colors=["R"], wr=60), card("On-color", colors=["W"], wr=58)]
+    pick_two = DraftAdvisor(mock_metrics, pool)
+    pick_two_recs = pick_two.evaluate_pack(pack, 5, 1, 2, 4, picks_completed=4, total_picks=21)
+    normal = DraftAdvisor(mock_metrics, pool)
+    normal_recs = normal.evaluate_pack(pack, 9, 1, picks_completed=8, total_picks=42)
+    assert (pick_two.picks_completed, pick_two.total_picks) == (8, 42)
+    assert [(r.card_name, r.contextual_score, r.cast_probability) for r in pick_two_recs] == \
+        [(r.card_name, r.contextual_score, r.cast_probability) for r in normal_recs]

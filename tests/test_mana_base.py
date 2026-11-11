@@ -301,24 +301,6 @@ def test_primary_cost_is_used_for_castability_and_basic_allocation():
     assert {land["name"] for land in basics} == {"Mountain"}
 
 
-def test_persistent_ramp_excludes_one_shot_mana_and_unknown_tags():
-    from src.advisor.mana_base import ManaSourceAnalyzer
-
-    cards = [
-        {"types": ["Creature"], "oracle_text": "{T}: Add {G}."},
-        {"types": ["Sorcery"], "oracle_text": "Search your library for a basic land "
-         "card and put it onto the battlefield tapped."},
-        {"types": ["Creature"], "oracle_text": "Create a Heartwood token.",
-         "produced_tokens": [{"name": "Heartwood", "oracle_text": "{T}: Add {R} or {G}."}]},
-        {"types": ["Instant"], "oracle_text": "Add {C}{C}{C}."},
-        {"types": ["Creature"], "tags": ["fixing_ramp"]},
-        {"types": ["Artifact"], "oracle_text": "{T}, Sacrifice this artifact: "
-         "Add one mana of any color."},
-        {"types": ["Land"], "oracle_text": "{T}: Add {G}."},
-    ]
-    assert ManaSourceAnalyzer(cards).persistent_ramp_count == 3
-
-
 def test_artifact_token_replacement_suppresses_future_mana_only():
     from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
 
@@ -332,7 +314,6 @@ def test_artifact_token_replacement_suppresses_future_mana_only():
     assert count_fixing([producer])["G"] == 1
     replaced = ManaSourceAnalyzer([producer, treasure, visitor])
     assert replaced.suppresses_artifact_token_mana
-    assert replaced.persistent_ramp_count == 0
     assert count_fixing([producer, treasure, visitor]) == dict.fromkeys("WUBRG", 0)
     existing_token = {"name": "Heartwood", "types": ["Artifact"],
                       "oracle_text": "{T}: Add {R} or {G}."}
@@ -371,7 +352,6 @@ def test_foreign_and_restricted_mana_cannot_support_general_spells(rules, tokens
     assert count_fixing([card]) == dict.fromkeys("WUBRG", 0)
     assert analyzer.any_color_sources == 0
     assert analyzer.total_fixing_cards == 0
-    assert analyzer.persistent_ramp_count == 0
 
 
 @pytest.mark.parametrize("own_kind, other_kind, expected", [
@@ -379,7 +359,7 @@ def test_foreign_and_restricted_mana_cannot_support_general_spells(rules, tokens
     ("Treasure", "Clue", 1),
 ])
 def test_mixed_ability_uses_only_our_tokens_in_old_overlay(own_kind, other_kind, expected):
-    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+    from src.advisor.mana_base import count_fixing
 
     card = {"types": ["Creature"], "oracle_text":
             f"Create a {own_kind} token. They create a {other_kind} token.",
@@ -389,20 +369,17 @@ def test_mixed_ability_uses_only_our_tokens_in_old_overlay(own_kind, other_kind,
                  "{T}, Sacrifice this token: Add one mana of any color."},
             ]}
     assert count_fixing([card]) == dict.fromkeys("WUBRG", expected)
-    assert ManaSourceAnalyzer([card]).persistent_ramp_count == 0
 
 
-def test_plain_own_treasure_and_colorless_permanent_ramp_still_work():
-    from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
+def test_plain_own_treasure_fixes_and_colorless_mana_does_not():
+    from src.advisor.mana_base import count_fixing
 
     treasure = {"types": ["Creature"], "oracle_text": "Create a Treasure token.",
                 "produced_tokens": [{"name": "Treasure", "types": ["Artifact"],
                                      "oracle_text": "{T}, Sacrifice this token: Add one mana of any color."}]}
     assert count_fixing([treasure]) == dict.fromkeys("WUBRG", 1)
-    assert ManaSourceAnalyzer([treasure]).persistent_ramp_count == 0
     colorless = {"types": ["Creature"], "oracle_text": "{T}: Add {C}."}
     assert count_fixing([colorless]) == dict.fromkeys("WUBRG", 0)
-    assert ManaSourceAnalyzer([colorless]).persistent_ramp_count == 1
 
 
 def test_legacy_replacement_text_suppresses_future_artifact_mana():

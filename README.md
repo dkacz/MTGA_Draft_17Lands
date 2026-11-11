@@ -4,6 +4,15 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.32 includes the upstream releases 4.26 to 4.31. Deck building,
+the deck score and the deck simulator now follow the upstream project, whose
+deck score is fit to about 480,000 17Lands decks. The pick advisor remains this
+fork's advisor. It uses the upstream payment rules for hybrid mana, so a {G/U}
+card is castable with either color and {2/U} or {U/P} do not require blue. In
+Pick-Two drafts it measures draft progress by the cards taken, so pick N counts
+as pick 2N-1 of a normal draft, and it shows no wheel percentage in Pick-Two
+drafts or in pods with other than eight players.
+
 Version 4.24 revises Advisor/Value to blend sample-aware archetype data once,
 use the strongest playable main-deck candidates for curve and role needs, and
 avoid rebuilding many decks for every Pack 3 recommendation. Draft progress
@@ -44,11 +53,11 @@ The original project's documentation follows below.
 
 Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 
-**Version 4.23:** Sealed session isolation, clipboard import and Auto Lands fixes, more accurate mana simulation, automatic event scheduling from MTGpile, and safer dataset downloads and event selection. See the [release notes](release_notes.txt) for details.
+**Version 4.31:** The daily dataset pipeline follows 17Lands' host change and refreshes its API cache daily, and the deck score tooling gains a pre-registered test of three advisor pick rules on game results. See the [release notes](release_notes.txt) for details.
 
 **This application will automatically support new sets as soon as the sets are released on Arena _and_ the data is available on the [17Lands card ratings](https://www.17lands.com/card_ratings) page.**
 
-**Supported Events:** Premier Draft, Traditional Draft, Quick Draft, Sealed, Traditional Sealed, and Cube.
+**Supported Events:** Premier Draft, Traditional Draft, Quick Draft, Pick-Two Draft, Contender Draft, Sealed, Traditional Sealed, Arena Direct, and Cube.
 
 ## Table of Contents
 
@@ -120,12 +129,12 @@ macOS actively quarantines unsigned apps downloaded from the internet. To run th
 
 ## Marquee Features
 
-- **Draft Advisor:** Ranks cards using observed card quality, sample-aware archetype data, color access, and the curve and roles of playable main-deck candidates. `VALUE` is a heuristic index. Wheel estimates are separate hints. Look for the ⭐ symbol for strong observed quality with a sufficient sample and color fit.
+- **Draft Advisor:** Ranks cards using observed card quality, sample-aware archetype data, color access, and the curve and roles of playable main-deck candidates. `VALUE` is a heuristic index. Wheel estimates are separate hints. Look for the ⭐ symbol for strong observed quality with a sufficient sample and color fit. You can turn it off under `File -> Preferences...`.
 - **AI Monte Carlo Auto-Optimizer:** Click the "Auto-Optimize Deck" button to unleash a background simulation engine that mathematically tests different deck permutations (16 lands vs 17 lands, swapping out clunky 5-drops for efficient 2-drops) across 10,000 simulated games to find the perfect 40-card configuration.
 - **Sealed Studio:** A fully interactive drag-and-drop workspace specifically tailored for Sealed deckbuilding. Features an AI Shell Generator that automatically builds the top 3 mathematically optimal deck variants for your specific pool (e.g., Best 2-Color, Greedy Splash, Aggro). Saved sessions are isolated by Arena entry, restored decks respect the current pool, and clipboard imports keep sideboard cards out of the main deck.
-- **Mana Base Tools:** Auto Lands counts every card copy when filling a 40-card deck and allocating colors. Mana simulation uses the colors a source actually produces, one land drop per turn, and a shared mana budget for deploying ramp cards.
+- **Mana Base Tools:** Auto Lands counts every card copy when filling a 40-card deck and allocating colors. Hybrid costs use a color the deck can pay rather than requiring both halves; generic and Phyrexian alternatives do not force an extra color. The advisor, splash checks and deck labels share these payment rules. Mana simulation uses the colors a source actually produces, one land drop per turn, and a shared mana budget for deploying ramp cards; its separate payment model and limitations are described in [Hybrid Mana](docs/hybrid-mana.md).
 - **Automated Cloud Datasets:** The Cloud ETL Pipeline compiles and distributes the latest 17Lands telemetry every day, using [MTGpile's Arena schedule](https://mtgpile.com/api/v1/events/arena/all.json), compiled from Wizards of the Coast's published schedules, to select active supported sets and formats. When you open the app, it syncs the data for active Arena events in the background. View the [live dataset calendar](https://unrealities.github.io/MTGA_Draft_17Lands/calendar.html), including the source update date, or read the [ETL documentation](docs/05-server-etl-pipeline.md).
-- **Event-Matched Statistics:** Startup and live scanning select statistics for the detected set and event format. A matching dataset you previously selected is retained; otherwise All users is preferred, followed by an available group for the same event. If no dataset matches the event, prior statistics are cleared; download the missing event from Datasets or select a dataset manually.
+- **Event-Matched Statistics:** Startup and live scanning select statistics for the detected set and event format, including Pick-Two Traditional/Quick Draft and Traditional Sealed. A matching dataset you previously selected is retained; otherwise All users is preferred, followed by an available group for the same event. Resolved card IDs cache metadata only, so switching datasets cannot carry over old win rates. If no dataset matches the event, prior statistics are cleared; download the missing event from Datasets or select a dataset manually.
 - **Zero-Day Card Recognition:** Missing card metadata is resolved from your local MTG Arena SQLite database, with Scryfall as a fallback, in a background worker. The draft window stays responsive, and failed lookups retry automatically instead of permanently hiding cards.
 - **Mini Mode:** Click the `Mini Mode` button to hide the main dashboard and display a compact, draggable, always-on-top window. Perfect for single-monitor setups or playing seamlessly over the Arena client.
 - **Dynamic Columns:** You can customize the columns displayed in any table (Pack, Card Pool, Compare) by **Right-Clicking the column header**. Add specific 17Lands stats or remove ones you don't need. The app remembers your layout automatically.
@@ -140,7 +149,7 @@ The application is structured into a collapsible Live Dashboard and several func
 ### Live Dashboard
 - **Advisor Recommendations:** Explains the mathematical reasoning behind the top 3 cards in the current pack.
 - **Live Pack:** Displays the cards currently offered to you with their tactical scores.
-- **Seen Cards (Wheel Tracker):** Tracks cards you passed previously in the draft.
+- **Seen Cards (Wheel Tracker):** Tracks cards you passed previously in the draft. Wheel percentages are shown only for eight-player, one-card drafts, before pick 9 and while at least 9 cards remain in the pack. Pick-Two and other pod sizes retain returned-pack tracking without a percentage.
 - **Sidebar:** Contains visual "Open Lane" Signal detection, your current Mana Curve, and your Pool Balance (Creatures/Spells/Lands). You can click on the headers of these panels to collapse them.
 
 ### Application Tabs
@@ -162,6 +171,7 @@ Access Settings via `File -> Preferences...`
 - **Highlight Row by Mana Cost:** Colors the background of table rows based on the card's color identity.
 - **Auto-Switch Deck Filter to Best Colors:** When the filter is set to "Auto", the app tracks your picks and will automatically switch to displaying data for your confirmed color pair once your lane is identified.
 - **Enable Draft Log Creation:** Records the draft step-by-step in a readable log file within the `./Logs` folder.
+- **Show Draft Advisor:** Turn off to hide the Advisor panel and the Mini Mode Advisor tab and skip the advisor's work on each pick. The Value column and the ⭐ pack markers come from the advisor, so they go blank too.
 
 ---
 
@@ -243,6 +253,12 @@ For developers looking to contribute, fork, or understand the architecture of th
 - `03-business-logic.md`
 - `04-external-integrations.md`
 - `05-server-etl-pipeline.md`
+- [Hybrid mana payment rules and simulator limitations](docs/hybrid-mana.md)
+
+The deck score's weights are fit to 17Lands game results with the scripts in
+[`Tools/DeckScoreFit`](Tools/DeckScoreFit/README.md), which also test the
+advisor's pick rules against those results
+([protocol and results](experiments/2026-11-03-rule-targets/RESULTS.md)).
 
 ### Environment Setup
 
@@ -266,6 +282,20 @@ To run tests with coverage reporting:
 poetry run pytest tests/ --cov=src
 ```
 
+### Continuous Integration
+
+Every pull request runs two jobs: the full Python test suite on Linux/Python 3.12
+with coverage, and the JavaScript tests. The CI workflow runs Python 3.12, 3.13
+and 3.14 on Linux, macOS and Windows every Sunday at 08:17 UTC. Weekly runs also
+audit Python and JavaScript dependencies. CI can be dispatched manually with
+`full_matrix=true` to run the same extended checks on a branch.
+
+Before releasing, run **Build & Publish Release** on the release branch with
+**publish disabled** (the default). This runs all nine Python combinations,
+JavaScript tests, dependency audits, and builds and smoke-tests the three platform
+packages without publishing. The same checks gate automatic publication after
+merging to `main` or `master`.
+
 ### Automated Releases & Version Management
 
 This project uses a fully automated CI/CD pipeline via GitHub Actions. Creating a new public release is entirely frictionless.
@@ -278,9 +308,9 @@ The pipeline triggers **automatically whenever code is merged into the `master` 
    - **Patch Bump (+0.01):** `poetry run python bump_version.py`
    - **Major Bump (+1.0):** `poetry run python bump_version.py major`
    - **Manual Set:** `poetry run python bump_version.py --set 4.50`
-2. The script will update your config files and ask: `Would you like to automatically commit and push these changes to your branch? (y/N)`
-3. Type `y` and press **Enter**.
-4. Go to GitHub and merge your Pull Request into your main branch. The release will build and publish automatically.
+2. The script updates `src/constants.py`, `builder/Installer.iss` and `pyproject.toml`, prepends a placeholder to `release_notes.txt`, and asks: `Would you like to automatically commit and push these changes to your branch? (y/N)`.
+3. Choose `N` to review the changes first. Replace the release-note placeholder with the changes since the previous release, update the README version summary and the current version in `docs/00-system-overview.md`, then commit and push the release branch. Choosing `y` immediately commits and pushes only the files updated by the script; documentation edits still need a separate commit.
+4. Validate the release branch as described above, then merge your Pull Request into your main branch. The release publishes automatically only after the full tests and all three platform builds and smoke tests pass.
 
 *(Note: If you merge code into main without bumping the version number, the pipeline will simply rebuild and update the executables on the existing release—perfect for hotfixes)*
 

@@ -23,10 +23,8 @@ The engine does not "lock in" colors based on the first few picks. It uses recen
 Instead of evaluating a card globally (e.g., its win rate across all 17Lands users), the engine identifies your leading "Color Pair" (e.g., Blue-Black/UB) and prioritizes data for that specific pairing.
 
 - **Gravity Logic:** The engine scores all 10 possible color pairs based on the weighted power of cards in your pool and the presence of "Gold" cards that reward specific pairs.
-- **Progressive Weighting:**
-  - **Pack 1:** Evaluates cards primarily (90%) on their Global GIHWR.
-  - **Pack 3:** Evaluates cards primarily (80%) on their Archetype-specific win rate.
-- **Synergy Payoff:** If a card performs > 1.5% better in your specific color pair than its global average, it receives an **Archetype Synergy** bonus.
+- **Progressive Weighting:** Once your pool has a leading pair, a card's score is its Global GIHWR plus a weight times how much better (or worse) it does in that pair. The weight rises through each pack, from 0.65 at the first pick to 1.21 at the 13th, the last choice in a 14-card pack; it stops growing at the 15th, at 1.3. In Pick-Two drafts, where each pick takes two cards, pick N weighs like pick 2N − 1, when as many cards have left the pack. The pair's win rate is shrunk toward the global one when it has fewer than 1,000 games.
+- **Counted once:** The pair's win rate enters the score only through this weighting; there is no separate bonus for cards that do better in the pair than overall. When the weighting moves a card's score by 5 points or more (a third of a standard deviation), its reasons say so, for example **Better in UB (+6.2)** or **Worse in UB (-5.4)**.
 
 ---
 
@@ -54,13 +52,14 @@ Modern Limited is dictated by "Mana Velocity" and "Mana Stability."
 
 ---
 
-## 6. Value Over Replacement (VOR) & "Glue Cards"
+## 6. Wheel Chance (Shown, Not Scored)
 
-The v5 engine moves beyond raw win rates by pre-calculating the **Format Texture** of a set when it loads.
+The engine estimates each card's chance of coming back from its ALSA and its rank in the pack, and shows it in the Wheel column. It doesn't change the card's score. Packs with fewer than 9 cards, and picks 9 and later, show no chance. The existing curves assume eight-player, one-card picks: Pick-Two and other pod sizes show no percentage until a suitable model exists. This does not disable the scanner's pack-return tracker.
 
-- **Role Scarcity (VOR):** The engine analyzes the dataset to count how many "Playable" (WR > Baseline) Commons and Uncommons exist for critical roles (e.g., Removal, 2-Drops) in each color.
-  - If a user sees a Playable Red 2-Drop, and the engine knows there are only two viable Red 2-drops in the entire set, it applies a `High VOR (+6.0)` bonus.
-- **Archetype Glue:** If a Common/Uncommon has a win rate in the user's specific color pair that is `> 1.0%` higher than its global average, it is classified as "Archetype Glue." It receives an aggressive point multiplier to force it to outscore generic Rares.
+In Pick-Two, archetype weighting and first-pack off-color pressure both use
+pick `2N - 1` for passing round `N`, so commitment advances with cards removed.
+
+Replays of 15,000 17Lands drafts showed that value over replacement, the late-signal bonus, the wheel multiplier, the signal tie-breaker and the pack 3 deck-improvement bonus didn't change the advisor's picks or how following it related to winning, so the engine no longer uses them (v4.28). The Open Lanes panel still shows lane signals.
 
 ---
 
@@ -88,7 +87,7 @@ Users can click a single button to perfectly balance their lands using Pro-Tour 
 
 - **Pip Volume Calculation:** Counts the exact number of specific colored mana symbols.
 - **Universal Fixer Detection:** Explicitly identifies Treasure-makers, Fetchlands, and "Any Color" dorks.
-- **Hybrid Mana Resolution:** Correctly categorizes hybrid mana (e.g., `{W/U}`) towards whichever core color the deck favors.
+- **Hybrid Mana Resolution:** Pays hybrid mana (e.g., `{W/U}`) with a color the deck already plays; `{2/U}` and `{U/P}` never force a color. Castability, splash checks, mana allocation and deck labels share these rules; see [hybrid-mana.md](hybrid-mana.md).
 - **Splash Starvation Protection:** Strictly caps basic land allocations for splash colors to prevent main-color starvation.
 
 ### B. Monte Carlo Simulation
@@ -97,8 +96,25 @@ Evaluates the user's custom deck by running a **10,000-game Monte Carlo simulati
 
 - Applies pro-level London mulligan heuristics.
 - Calculates probabilities for `cast_t2/t3/t4`, Mana Screw, Mana Flood, and Color Screw.
+- **Mana filters** (Prophetic Prism, Chromatic Star), whose mana abilities cost as much mana as they make, count toward the colors a deck can cast but not toward its mana. Signets, Sol Ring, mana dorks and Treasure makers stay ramp.
+- **Repeatable results:** Every deck uses the same fixed random seed, and cards are put in a canonical order first, so a deck always gets the same results and card order or names don't change them.
 
-### C. On-Demand AI Auto-Optimizer
+### C. Deck Score & Estimated Record
+
+The deck builder ranks its candidate builds by a deck score:
+
+`75 + 12 × card quality + 3.5 if two colors or fewer + 3.2 for a supported domain deck − 2.5 per missing fixing card − 10 per missing spell`
+
+- **Card quality** is the mean win rate of the deck's spells, in standard deviations from the format mean.
+- **Supported domain:** a deck of 3+ colors with 2+ domain payoffs and 4+ fixing cards.
+- **Missing fixing:** for other decks of 3+ colors, fixing cards short of one per color beyond the first.
+- **Missing spells:** spells short of a full deck for the pool size, less one.
+
+The weights were fit to about 480,000 17Lands Premier Draft decks over ten sets, comparing players of similar skill (`Tools/DeckScoreFit`). Curve, evasion and tribal adjustments were worth about zero once card quality was counted, so the score leaves them out. The missing-fixing weight is fit instead to which candidate builds drafters chose; see [the deck builder's suggestions before and after](logs/deck-builder-before-after.md).
+
+The **estimated record** (`[Est: 3.5 wins]`) is the expected number of wins for a deck of that score: in Premier Draft, an event that ends at 7 wins or 3 losses; in Traditional Draft, three best-of-three matches.
+
+### D. On-Demand AI Auto-Optimizer
 
 Users can actively "brute-force" permutations of their current deck configuration via a dedicated background task.
 

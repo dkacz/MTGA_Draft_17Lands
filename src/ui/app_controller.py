@@ -210,6 +210,7 @@ class AppController:
             start_time = self.orchestrator.scanner.draft_start_time
             event_string = self.orchestrator.scanner.event_string
             cards_per_pick = self.orchestrator.scanner.cards_per_pick
+            number_of_players = self.orchestrator.scanner.number_of_players
         finally:
             self.orchestrator.scanner.lock.release()
 
@@ -230,12 +231,16 @@ class AppController:
             for c, v in sig_calc.calculate_pack_signals(h_pack, entry["Pick"]).items():
                 scores[c] += v * decay
 
-        # Pass signals securely into Advisor
-        advisor = DraftAdvisor(metrics, taken_cards, signals=scores)
-        recommendations = advisor.evaluate_pack(
-            pack_cards, pi, current_pack=pk,
-            picks_completed=picks_completed, total_picks=total_picks,
-        )
+        recommendations = []
+        if self.config.settings.advisor_enabled:
+            # Pass signals securely into Advisor
+            advisor = DraftAdvisor(metrics, taken_cards, signals=scores)
+            recommendations = advisor.evaluate_pack(
+                pack_cards, pi, current_pack=pk,
+                cards_per_pick=cards_per_pick,
+                number_of_players=number_of_players,
+                picks_completed=picks_completed, total_picks=total_picks,
+            )
 
         # UPDATE UI STATE
         if pk > 0:

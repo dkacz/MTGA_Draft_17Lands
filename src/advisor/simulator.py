@@ -10,18 +10,8 @@ from typing import NamedTuple
 import numpy as np
 from numba import njit
 
-from src import constants
-from src.advisor.card_features import (
-    get_main_cmc,
-    get_main_face,
-    get_main_mana_cost,
-    get_main_types,
-)
-from src.advisor.mana_base import ManaSourceAnalyzer
-
 # Mana Bitmask Mapping
 COLOR_BITS = {"W": 1, "U": 2, "B": 4, "R": 8, "G": 16}
-BASIC_MANA_BITS = {"Plains": 1, "Island": 2, "Swamp": 4, "Mountain": 8, "Forest": 16}
 ANY_COLOR = 31  # W|U|B|R|G
 
 # Fixed widths so the arrays can be consumed by the numba kernel.
@@ -35,9 +25,10 @@ PIP_PATTERN = re.compile(r"\{(.*?)\}")
 class DeckArrays(NamedTuple):
     is_land: np.ndarray  # bool[40]
     is_ramp: np.ndarray  # bool[40] non-land mana sources (rocks, dorks, treasure)
+    is_filter: np.ndarray  # bool[40] mana filters: fix colors, add no mana
     is_removal: np.ndarray  # bool[40]
     costs: np.ndarray  # int8[40] printed mana value used for castability
-    mana_produced: np.ndarray  # int32[40] color mask produced by lands/ramp
+    mana_produced: np.ndarray  # int32[40] color mask produced by lands/ramp/filters
     pips: np.ndarray  # int32[40, MAX_PIPS] colored pips, each a mask of options
     pip_count: np.ndarray  # int8[40] number of colored pips used in `pips`
     generic: np.ndarray  # int8[40] generic portion of the cost
@@ -84,19 +75,60 @@ def parse_mana_cost(mana_cost, fallback_cmc=0):
     return colored, generic
 
 
+MANA_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+
+def _mana_ability_balance(text):
+    """
+    Compares the mana each "cost: Add ..." ability spends with the mana it
+    makes. Returns (net_gain, filter): whether any ability makes more mana
+    than it costs (Sol Ring, Signets, "{T}: Add {G}"), and whether any ability
+    costs mana and makes no more than it costs (Prophetic Prism's
+    "{1}, {T}: Add one mana of any color"). `text` must be lowercase.
+    """
+    net_gain = has_filter = False
+    for ability in re.split(r"[.\n]", text):
+        match = re.match(r"(.*?):\s*add\b(.*)", ability)
+        if not match:
+            continue
+        cost, output = match.groups()
+
+        paid = 0
+        for sym in PIP_PATTERN.findall(cost):
+            if sym.isdigit():
+                paid += int(sym)
+            # Energy is a counter cost, not mana spent on activation.
+            elif sym not in ("t", "q", "x", "e"):
+                paid += 1
+
+        # "Add {R} or {G}" makes one mana; take the largest alternative
+        made = max(
+            len(PIP_PATTERN.findall(option))
+            for option in re.split(r",\s*(?:or\s+)?|\s+or\s+", output)
+        )
+        if not made:
+            word = re.search(r"\b(\w+) mana\b", output)
+            made = MANA_WORDS.get(word.group(1), 1) if word else 1
+
+        if made > paid:
+            net_gain = True
+        elif paid:
+            has_filter = True
+    return net_gain, has_filter
+
+
 def _parse_deck_to_arrays(deck_list):
     """Converts the deck from slow Python dicts to fast NumPy arrays."""
     flat_deck = []
     for c in deck_list:
-        flat_deck.extend([{**c, "count": 1}] * int(c.get("count", 1)))
+        flat_deck.extend([c] * int(c.get("count", 1)))
 
     if len(flat_deck) < DECK_SIZE:
         return None
 
-    flat_deck = flat_deck[:DECK_SIZE]
-    deck_sources = ManaSourceAnalyzer(flat_deck)
     is_land = np.zeros(DECK_SIZE, dtype=np.bool_)
     is_ramp = np.zeros(DECK_SIZE, dtype=np.bool_)
+    is_filter = np.zeros(DECK_SIZE, dtype=np.bool_)
     is_removal = np.zeros(DECK_SIZE, dtype=np.bool_)
     costs = np.zeros(DECK_SIZE, dtype=np.int8)
     mana_produced = np.zeros(DECK_SIZE, dtype=np.int32)
@@ -104,35 +136,49 @@ def _parse_deck_to_arrays(deck_list):
     pip_count = np.zeros(DECK_SIZE, dtype=np.int8)
     generic = np.zeros(DECK_SIZE, dtype=np.int8)
 
-    for i, c in enumerate(flat_deck):
-        types = get_main_types(c)
+    for i, c in enumerate(flat_deck[:DECK_SIZE]):
+        types = c.get("types", [])
         tags = c.get("tags", [])
+        text = str(c.get("oracle_text", c.get("text", ""))).lower()
+        any_color = re.search(r"\bany (?:one |combination of )?colors?\b", text) is not None
 
         is_land[i] = "Land" in types
+        # Mana filters (Prophetic Prism, Chromatic Star) only convert mana:
+        # they fix colors but add no source. A card with any net-gain mana
+        # ability or a treasure ability stays ramp.
+        net_gain, filters = _mana_ability_balance(text)
+        is_filter[i] = (
+            filters and not net_gain and "treasure" not in text and not is_land[i]
+        )
+        is_ramp[i] = (
+            ("fixing_ramp" in tags or any_color or "treasure" in text)
+            and not is_land[i]
+            and not is_filter[i]
+        )
         is_removal[i] = "removal" in tags
 
-        name = get_main_face(c).get("name", c.get("name", ""))
-        if is_land[i] and ("Basic" in types or name in constants.BASIC_LANDS):
-            # The shared analyzer deliberately excludes basics. Their names
-            # identify production even when enriched metadata has colors=[].
-            mana_produced[i] = BASIC_MANA_BITS.get(name.removeprefix("Snow-Covered "), 0)
-        else:
-            sources = ManaSourceAnalyzer(
-                [c],
-                suppress_artifact_token_mana=deck_sources.suppresses_artifact_token_mana,
-            )
-            # Masks describe evidenced color access (including fetch/cycling),
-            # retaining the simulator's approximation of activation timing.
-            mask = ANY_COLOR if sources.any_color_sources else 0
-            for color, bit in COLOR_BITS.items():
-                if sources.sources[color]:
-                    mask |= bit
-            mana_produced[i] = mask
-            is_ramp[i] = not is_land[i] and (mask > 0 or sources.persistent_ramp_count > 0)
+        # Calculate produced mana bitmask
+        if is_land[i] or is_ramp[i] or is_filter[i]:
+            if any_color or "treasure" in text:
+                mana_produced[i] = ANY_COLOR
+            else:
+                # Read production clauses, excluding symbols in activation costs.
+                symbols = []
+                for clause in re.findall(r"\badd\b([^.;\n]*)", text):
+                    symbols.extend(PIP_PATTERN.findall(clause))
+                mask = 0
+                if symbols:
+                    for symbol in symbols:
+                        for color in symbol.upper().split("/"):
+                            mask |= COLOR_BITS.get(color, 0)
+                else:
+                    for color in c.get("colors", []):
+                        mask |= COLOR_BITS.get(color, 0)
+                mana_produced[i] = mask
 
         # Printed cost (castability deliberately ignores cycling / alt costs)
         if not is_land[i]:
-            colored, gen = parse_mana_cost(get_main_mana_cost(c), get_main_cmc(c))
+            colored, gen = parse_mana_cost(c.get("mana_cost", ""), c.get("cmc", 0))
             total = len(colored) + gen
             # Pips beyond MAX_PIPS (8+ colored pips) are treated as generic
             colored = colored[:MAX_PIPS]
@@ -143,7 +189,15 @@ def _parse_deck_to_arrays(deck_list):
             costs[i] = min(total, 100)
 
     return DeckArrays(
-        is_land, is_ramp, is_removal, costs, mana_produced, pips, pip_count, generic
+        is_land,
+        is_ramp,
+        is_filter,
+        is_removal,
+        costs,
+        mana_produced,
+        pips,
+        pip_count,
+        generic,
     )
 
 
@@ -170,20 +224,15 @@ def _can_pay(card, pips, pip_count, generic, n_src, cover):
     that produce a color in the union of S's masks. Generic pips then take any
     of the remaining sources.
     """
-    if pip_count[card] + generic[card] > n_src:
+    k = pip_count[card]
+    if k + generic[card] > n_src:
         return False
-    return _hall_ok(pips[card], pip_count[card], cover)
-
-
-@njit(cache=True)
-def _hall_ok(masks, k, cover):
-    """True if the first k pip masks can each take a distinct source (Hall)."""
     for subset in range(1, 1 << k):
         union = 0
         size = 0
         for p in range(k):
             if subset & (1 << p):
-                union |= masks[p]
+                union |= pips[card, p]
                 size += 1
         if cover[union] < size:
             return False
@@ -198,6 +247,7 @@ def _collect_sources(
     turn,
     is_land,
     is_ramp,
+    is_filter,
     costs,
     mana_produced,
     pips,
@@ -214,13 +264,16 @@ def _collect_sources(
     matching, so the player can choose the best subset to play; usable lands
     are capped at `turn` (one land drop per turn, on the play).
 
-    Ramp must be in hand on the previous turn. Ramp cards are accepted
-    greedily in deck order while all accepted costs together stay payable
-    from that turn's lands: the total is capped at `turn - 1` sources and the
-    colored pips of all accepted ramps are matched jointly, so two ramps
-    cannot both spend one colored source. This approximates deployment on the
-    previous turn without modeling earlier ramp chains. Casting ramp is not
-    charged against the current turn's mana.
+    Ramp must be in hand on the previous turn and individually payable from
+    that turn's land colors. Ramp cards share a scalar mana budget capped at
+    `turn - 1`, spent greedily in deck order. This approximates deployment on
+    the previous turn without modeling earlier ramp chains or reserving
+    specific colors across ramp payments. Casting ramp is not charged against
+    the current turn's mana.
+
+    Filters are deployed the same way but add only a color option, not a
+    source: their mask joins Hall's matching while the usable count stays the
+    same, since activating one spends a source to make one mana of its colors.
     """
     n = 0
     for j in range(start, start + seen):
@@ -243,24 +296,17 @@ def _collect_sources(
 
     remaining = min(n_prev, turn - 1)
     has_cover = False
-    paid = np.zeros(MAX_PIPS, dtype=np.int32)  # colored pips of accepted ramps
-    n_paid = 0
     for j in range(start, start + prev_seen):
         idx = deck_indices[j]
-        if is_ramp[idx] and costs[idx] < turn and n < MAX_SOURCES:
-            k = pip_count[idx]
-            if costs[idx] > remaining or n_paid + k > MAX_PIPS:
-                continue
+        if (is_ramp[idx] or is_filter[idx]) and costs[idx] < turn and n < MAX_SOURCES:
             if not has_cover:
                 _fill_cover(land_masks, n_prev, cover)
                 has_cover = True
-            for p in range(k):
-                paid[n_paid + p] = pips[idx, p]
-            if _hall_ok(paid, n_paid + k, cover):
-                n_paid += k
+            if _can_pay(idx, pips, pip_count, generic, remaining, cover):
                 src_masks[n] = mana_produced[idx]
                 n += 1
-                usable += 1
+                if is_ramp[idx]:
+                    usable += 1
                 remaining -= costs[idx]
     return n, usable
 
@@ -273,6 +319,7 @@ def _castable_on_turn(
     turn,
     is_land,
     is_ramp,
+    is_filter,
     costs,
     mana_produced,
     pips,
@@ -303,6 +350,7 @@ def _castable_on_turn(
         turn,
         is_land,
         is_ramp,
+        is_filter,
         costs,
         mana_produced,
         pips,
@@ -328,6 +376,7 @@ def _castable_on_turn(
 def _run_fast_monte_carlo(
     is_land,
     is_ramp,
+    is_filter,
     is_removal,
     costs,
     mana_produced,
@@ -335,7 +384,9 @@ def _run_fast_monte_carlo(
     pip_count,
     generic,
     iterations,
+    seed=0,
 ):
+    np.random.seed(seed)
     mulligans = 0
     screw_t3 = 0
     screw_t4 = 0
@@ -398,6 +449,7 @@ def _run_fast_monte_carlo(
             2,
             is_land,
             is_ramp,
+            is_filter,
             costs,
             mana_produced,
             pips,
@@ -414,6 +466,7 @@ def _run_fast_monte_carlo(
             3,
             is_land,
             is_ramp,
+            is_filter,
             costs,
             mana_produced,
             pips,
@@ -430,6 +483,7 @@ def _run_fast_monte_carlo(
             4,
             is_land,
             is_ramp,
+            is_filter,
             costs,
             mana_produced,
             pips,
@@ -468,12 +522,36 @@ def _run_fast_monte_carlo(
     )
 
 
-def simulate_deck(deck_list, iterations=10000):
+def _canonical_order(arrays):
+    """Sorts the cards by their simulation profile, so list order and card
+    names don't change which random draws each card receives."""
+    keys = [arrays.pips[:, p] for p in range(MAX_PIPS - 1, -1, -1)]
+    keys += [
+        arrays.generic,
+        arrays.pip_count,
+        arrays.mana_produced,
+        arrays.costs,
+        arrays.is_removal,
+        arrays.is_filter,
+        arrays.is_ramp,
+        arrays.is_land,
+    ]
+    order = np.lexsort(keys)
+    return DeckArrays(*(a[order] for a in arrays))
+
+
+def simulate_deck(deck_list, iterations=10000, seed=0):
+    """
+    Every deck uses the same fixed seed (Common Random Numbers): a deck always
+    gets the same results, and deck-to-deck comparisons share one random
+    stream. Cards are put in a canonical order first, so decks with the same
+    simulation profile get identical results whatever their order or names.
+    """
     arrays = _parse_deck_to_arrays(deck_list)
     if not arrays:
         return None
 
-    results = _run_fast_monte_carlo(*arrays, iterations)
+    results = _run_fast_monte_carlo(*_canonical_order(arrays), iterations, seed)
 
     return {
         "mulligans": (results[0] / iterations) * 100.0,

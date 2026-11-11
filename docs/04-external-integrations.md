@@ -83,6 +83,13 @@ non-200 responses, and missing cards remain retryable, with delays starting at
 5 seconds and doubling to a 300-second cap. Only successfully resolved metadata
 is written to `custom_cards.json`; legacy numeric placeholders are ignored.
 
+The ID cache retains card metadata (name, mana cost, types, colors, images and
+tags), never `deck_colors` statistics. Legacy cache entries have those statistics
+stripped on load. An alias ID uses the active dataset's ratings by card name;
+when that dataset has no matching name, the card remains visible but unrated.
+Switching sets, event formats, user groups or time periods cannot reuse a prior
+dataset's win rates, and clearing the dataset preserves resolved metadata.
+
 ---
 
 ## 3. Local MTGA SQLite Database (Zero-Day Fallback)
@@ -99,7 +106,7 @@ To ensure the app works seamlessly on Day 1 of a new set release without waiting
 
 - **Endpoint:** `https://api.github.com/repos/unrealities/MTGA_Draft_17Lands/releases/latest`
 - **Logic:**
-  1. Fetch `tag_name` (e.g., `v4.15`).
+  1. Fetch `tag_name` (e.g., `MTGA_Draft_Tool_V0430` for 4.30).
   2. Compare with internal constant `APPLICATION_VERSION`.
   3. If `Remote > Local`: Prompt user to open the release URL.
 
