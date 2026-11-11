@@ -3,7 +3,9 @@
 `collect_ratings.py` collects the grades that card reviewers publish before a
 set is released on MTG Arena, and `build_prior.py` turns them into the prior
 file from which the app predicts GIH WR for cards that 17Lands has not rated
-yet (`src/rating_prior.py`). Nothing in `src/` imports these tools.
+yet (`src/rating_prior.py`). `build_training_data.py` builds the table from
+which a later model learns the weights of the prior. Nothing in `src/` imports
+these tools.
 `collect_ratings.py` needs only the Python standard library, and
 `build_prior.py` also imports `src/rating_prior.py`.
 
@@ -122,6 +124,58 @@ A learned model can replace these values in the same file. Each of `mean`,
 `sd`, `scale`, `pick_order_weight` and `color_weight` may also be a list of
 `[games, value]` points, which the app interpolates at the dataset's game
 count.
+
+## Build the training table
+
+```
+python Tools/RatingPrior/build_training_data.py --data DATA_DIR --jobs 6 LCI MKM OTJ
+```
+
+The tool reads the 17Lands public data (CC BY 4.0)
+`DATA_DIR/17lands_public/{game,draft}_data_public.<SET>.PremierDraft.csv.gz`
+and `DATA_DIR/ratings/<SET>.csv`, and writes the table from which a later
+model learns how much each signal is worth in the first days of a set. Both
+files are streamed, so memory stays small, and `--jobs` builds several sets at
+the same time.
+
+The release is the earliest `draft_time` in the game data. A snapshot at day
+`d` (0, 1, 2, 3 and 7) counts the drafts and games with `draft_time` before
+release + `d` days, so day 0 has no data. The target counts the games drafted
+from 7 to 56 days after the release, that is on days 8 to 56, or up to the end
+of the public data when that comes sooner.
+
+`DATA_DIR/features/<SET>.csv` has one row per card and snapshot. `set_drafts`
+and `set_games` count the set's drafts and games in the snapshot. `alsa` and
+`ata` are averaged over `alsa_seen` copies seen and `ata_picked` picks, and
+`drafts_seen` and `drafts_picked` count the drafts that saw or picked the card.
+`gih_games` and `gih_wr_raw` are the card's games in hand and GIH WR in the
+snapshot, and `gih_wr` is the value that 17Lands would show, empty below 500
+games in hand. `target_gih_games` and `target_gih_wr` are the same over the
+target window. `authors` and `authors_sources` are the reviewers' score of
+`build_prior.py` and the number of sources behind it, and `authors_<source>`
+is one source's normal score.
+
+`DATA_DIR/features/<SET>_pairs.csv` has one row per card, two-color pair and
+snapshot. `pair_games` and `pair_win_rate` are the games and win rate of the
+decks whose `main_colors` are that pair, whatever the splash, and
+`two_color_games` and `two_color_win_rate` cover all two-color decks.
+`gih_games`, `gih_wr_raw` and `gih_wr` are the card's games in hand and GIH WR
+in decks of the pair. The `target_` columns give the same over the target
+window, and `target_all_gih_games` and `target_all_gih_wr` the card's GIH WR
+over all decks.
+
+The definitions follow 17Lands. A game is in hand when the card was in the
+opening hand or drawn, and a card only tutored does not count. ATA is the mean
+pick number within the pack, 1 to 14, at which the drafter took the card.
+ALSA counts each copy once, at the first sight of its pack in picks 1 to 8. A
+pack with more than 8 cards returns 8 picks later, so a copy still in it then
+was last seen 8 picks later, and any other copy at the first sight. A pack
+whose first sight or return is missing, or whose return does not match the
+first sight, is left out. Over TMT from the release to 21 April 2026 these
+values match the ALSA and ATA of the 17Lands card ratings within 0.05 picks
+on average. The GIH WR differs by 0.65 percentage points on average, mostly
+because the public data is 0.55 points higher for all cards. Basic lands count
+in the packs but are left out of the tables.
 
 ## Tests
 

@@ -56,19 +56,26 @@ PAIR_GAMES_PRIOR = 1000
 PAIR_PERSISTENCE = 0.49
 
 
-def reviewer_scores(ratings_path):
-    """{card: (score, number of sources)} from one set's ratings table."""
+def source_scores(ratings_path):
+    """{source: {card: normal score}} from the grades published before release,
+    the lists of one source averaged per card before ranking."""
     grades = defaultdict(lambda: defaultdict(list))
     with open(ratings_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row["before_release"] != "true" or not row["grade_value"]:
                 continue
             grades[row["source"]][row["card_name"]].append(float(row["grade_value"]))
+    return {
+        source: normal_scores({card: statistics.fmean(values) for card, values in cards.items()})
+        for source, cards in grades.items()
+    }
+
+
+def reviewer_scores(ratings_path):
+    """{card: (score, number of sources)} from one set's ratings table."""
     per_card = defaultdict(list)
-    for cards in grades.values():
-        for card, score in normal_scores(
-            {card: statistics.fmean(values) for card, values in cards.items()}
-        ).items():
+    for cards in source_scores(ratings_path).values():
+        for card, score in cards.items():
             per_card[card].append(score)
     means = {card: statistics.fmean(scores) for card, scores in per_card.items()}
     if len(means) < 2:
