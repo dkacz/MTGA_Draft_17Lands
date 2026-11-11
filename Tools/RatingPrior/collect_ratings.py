@@ -1,8 +1,9 @@
 """Collect pre-release author ratings of Limited cards into one table per set.
 
 The tables are the input of a model that predicts GIH WR for cards that 17Lands
-has not rated yet. Each row is one grade that one source gave to one card, with
-the card named exactly as 17Lands names it. Every raw response is kept on disk,
+has not rated yet. The sources are the Limited Level-Ups tier lists on 17Lands
+and the Draftsim set review. Each row is one grade that one source gave to one
+card, with the card named exactly as 17Lands names it. Every raw response is kept on disk,
 so a rerun reads the saved responses and sends no new requests.
 
 Usage:
@@ -28,7 +29,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,20 +44,10 @@ COLUMNS = ["set", "card_name", "source", "list_name", "grade_raw", "grade_value"
 TIER_VALUE = {t: 13 - i for i, t in enumerate(["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F"])}
 UNRATED_TIERS = {None, "", "TBD"}
 
-TCG_LISTING = "https://infinite-api.tcgplayer.com/c/articles/?vertical=magic-the-gathering&rows=200&offset={offset}"
-TCG_ARTICLE = "https://infinite-api.tcgplayer.com/content/article/{uuid}/"
-TCG_CARD = "https://infinite-api.tcgplayer.com/card/magic/{card_id}/"
 DRAFTSIM_REVIEW = "https://draftsim.com/mtg-{slug}-limited-set-review/"
-MTGAZONE_INDEX = "https://mtgazone.com/sitemap_index.xml"
 SEVENTEEN_FILTERS = "https://www.17lands.com/data/filters"
 SEVENTEEN_RATINGS = "https://www.17lands.com/card_ratings/data?expansion={code}&format=PremierDraft&start_date={day}"
 SEVENTEEN_TIER_LIST = "https://www.17lands.com/data/tier_list/{list_id}?date={date}"
-
-# A ChannelFireball review article is published from 45 days before to 30 days
-# after the Arena release. The window keeps an older set with a similar name out.
-CFB_WINDOW = (timedelta(days=45), timedelta(days=30))
-CFB_EXCLUDED_TITLES = ("Where to Find", "Constructed", "Pauper", "Cube", "Financial")
-
 
 def parse_utc(text):
     """Datetime in UTC from an ISO 8601 string, read as UTC when it has no offset."""
@@ -71,14 +62,6 @@ def iso(value):
 def plain_text(fragment):
     """Text of an HTML fragment with tags removed and entities decoded."""
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", fragment)).replace("\xa0", " ")).strip()
-
-
-def block_lines(fragment):
-    """Non-empty text lines of an HTML fragment, one line per block element."""
-    text = re.sub(r"<(?:/(?:p|h[1-6]|div|li)|hr)\b[^>]*>", "\n", fragment, flags=re.I)
-    text = re.sub(r"<br\b[^>]*>", " ", text, flags=re.I)
-    lines = (plain_text(line) for line in text.split("\n"))
-    return [line for line in lines if line]
 
 
 class Fetcher:
@@ -202,112 +185,6 @@ def release_times(fetcher):
     return {code: parse_utc(value) for code, value in data["start_dates"].items()}
 
 
-# ChannelFireball set reviews on TCGplayer -------------------------------------
-
-CFB_RATING_LINE = re.compile(r"^(limited|draft|booster draft|sealed|in |outside|best of|elsewhere)", re.I)
-
-
-def cfb_rating_line(segment):
-    """Grade line of one reviewed card, read from the text after its card spotlight.
-
-    The grade is one of the first block lines, usually a heading such as
-    "Limited: 3.0". A line counts when it starts with a grade label and holds
-    a number or the word "Sideboard"."""
-    for line in block_lines(segment)[:4]:
-        if CFB_RATING_LINE.match(line) and (re.search(r"\d", line) or "sideboard" in line.lower()):
-            return line[:160]
-    return None
-
-
-def cfb_value(line):
-    """Number on the 0-5 ChannelFireball scale for a grade line.
-
-    A line with a separate Booster Draft grade uses that grade, because the
-    model predicts Premier Draft results. A line with a range or several
-    conditional grades ("1.0 // 3.0", "In Blue/Red: 2.0 Elsewhere: 1.5") uses
-    the mean of its grades. Percentages are probabilities, not grades. A line
-    without a number, such as "Limited: Sideboard", has no value."""
-    text = re.sub(r"\d+(?:\.\d+)?\s*%", "", line)
-    grades = r"(\d+(?:\.\d+)?(?:\s*(?:-|/{1,2})\s*\d+(?:\.\d+)?)?)"
-    draft = re.search(r"\bdraft\b\D*?" + grades, text, re.I) or re.search(grades + r"\s+in\s+draft\b", text, re.I)
-    numbers = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", draft.group(1) if draft else text)]
-    numbers = [n for n in numbers if 0 <= n <= 5]
-    return round(statistics.mean(numbers), 3) if numbers else None
-
-
-def cfb_entries(body):
-    """(card id, grade line) for each card spotlight in an article body that has a grade.
-
-    The card id is a card name or a numeric TCGplayer card id. Product
-    spotlights, such as booster boxes, are skipped."""
-    parts = re.split(r"<card-spotlight\b([^>]*)>", body, flags=re.I)
-    for attrs, segment in zip(parts[1::2], parts[2::2]):
-        card_id = re.search(r'\bcard-id="([^"]+)"', attrs)
-        if 'is-product="true"' in attrs or not card_id:
-            continue
-        line = cfb_rating_line(segment)
-        if line:
-            yield html.unescape(card_id.group(1)).strip(), line
-
-
-def tcg_card_name(card_id, fetcher):
-    if not card_id.isdigit():
-        return card_id
-    return fetcher.json(TCG_CARD.format(card_id=card_id), f"cfb/card/{card_id}.json")["result"]["card"]["name"]
-
-
-class TcgListing:
-    """TCGplayer article list, read newest first and only as far back as needed.
-
-    The list pages shift whenever a new article appears, so they are saved
-    under the day they were read."""
-
-    def __init__(self, fetcher):
-        self.fetcher = fetcher
-        self.rows = []
-        self.offset = 0
-        self.oldest = None
-        self.complete = False
-
-    def back_to(self, when):
-        while not self.complete and (self.oldest is None or self.oldest > when):
-            page = self.fetcher.json(TCG_LISTING.format(offset=self.offset), f"cfb/listing_{TODAY}/offset_{self.offset}.json")["result"]
-            self.rows += page
-            self.offset += 200
-            self.complete = len(page) < 200
-            if page:
-                self.oldest = min(parse_utc(a["dateTime"]) for a in page)
-        return self.rows
-
-
-def collect_cfb(code, config, release, fetcher, listing):
-    title_key = config.get("cfb")
-    if not title_key:
-        return [], []
-    low, high = release - CFB_WINDOW[0], release + CFB_WINDOW[1]
-    articles = {}
-    for row in listing.back_to(low):
-        title = row["title"]
-        if (title_key in title and "Limited" in title and "Set Review" in title
-                and not any(word in title for word in CFB_EXCLUDED_TITLES) and low <= parse_utc(row["dateTime"]) <= high):
-            articles[row["uuid"]] = row
-    entries, documents = [], []
-    for row in sorted(articles.values(), key=lambda a: a["dateTime"]):
-        article = fetcher.json(TCG_ARTICLE.format(uuid=row["uuid"]), f"cfb/article/{row['uuid']}.json")["result"]["article"]
-        published = parse_utc(article.get("dateTime") or row["dateTime"])
-        author = row.get("authorName") or ""
-        found = 0
-        for card_id, line in cfb_entries(article["body"]):
-            entries.append(entry("cfb", author, tcg_card_name(card_id, fetcher), line, cfb_value(line), published, release))
-            found += 1
-        documents.append({
-            "source": "cfb", "list_name": author, "id": row["uuid"], "title": article.get("title", row["title"]).strip(),
-            "url": "https://www.tcgplayer.com/content" + (article.get("canonicalURL") or row.get("canonicalURL") or ""),
-            "published_at": iso(published), "updated_at": article.get("updatedTime") or "", "ratings": found,
-        })
-    return entries, documents
-
-
 # Draftsim set reviews -------------------------------------------------------
 
 
@@ -360,64 +237,7 @@ def collect_draftsim(code, release, fetcher, index):
     return entries, [document]
 
 
-# MTG Arena Zone set reviews -------------------------------------------------
-
-
-def mtgazone_value(raw):
-    """Number on the 0-5 MTG Arena Zone scale from "X // 5.0" or "X/5". "SB // 5.0" and other words have no value."""
-    match = re.match(r"(\d+(?:\.\d+)?)\s*/{1,2}\s*5(?:\.0)?\b", raw)
-    return float(match.group(1)) if match else None
-
-
-def mtgazone_entries(page):
-    """(candidate card names, grade text) for each "Rating: X // 5.0" or "Rating: X/5" of an MTG Arena Zone review.
-
-    Between the previous rating and this one, the review names the card in a
-    heading or a large-font paragraph and shows its picture. The candidates are
-    the last such name and the title of the last picture, in that order,
-    because the pictures are sometimes wrong (a "Bat'leth" heading above a
-    "Battle-Scarred Survivalist" picture). A rating without either is skipped."""
-    labels = [(m.start(), plain_text(m.group(1))) for m in re.finditer(
-        r'<(?:h[23]|p class="has-large-font-size[^"]*")[^>]*>(.*?)</(?:h[23]|p)>', page, re.S)]
-    labels = [(start, text) for start, text in labels if text and not text.startswith("Rating")]
-    pictures = []
-    for match in re.finditer(r'class="cards-list', page):
-        title = re.search(r'class="cardblock".*?title="([^"]*)"', page[match.start():match.start() + 4000], re.S)
-        if title and title.group(1).strip():
-            pictures.append((match.start(), html.unescape(title.group(1)).strip()))
-    previous = -1
-    for match in re.finditer(r"Rating\s*:", page):
-        window = [[text for start, text in found if previous < start < match.start()][-1:] for found in (labels, pictures)]
-        previous = match.start()
-        candidates = list(dict.fromkeys(window[0] + window[1]))
-        end = re.compile(r"</(?:strong|p|h[1-6])>").search(page, match.end())
-        raw = plain_text(page[match.end():end.start() if end else match.end() + 200])
-        if candidates and raw:
-            yield candidates, raw
-
-
-def collect_mtgazone(code, release, fetcher, index):
-    sitemap_index = fetcher.text(MTGAZONE_INDEX, f"mtgazone/sitemap_{TODAY}/sitemap_index.xml")
-    urls = set()
-    for sitemap in re.findall(r"<loc>(https://mtgazone\.com/post-sitemap\d*\.xml)</loc>", sitemap_index):
-        xml = fetcher.text(sitemap, f"mtgazone/sitemap_{TODAY}/{sitemap.rsplit('/', 1)[1]}")
-        urls.update(re.findall(r"<loc>(https://mtgazone\.com/[^<]*-%s-limited-set-review[^<]*)</loc>" % code.lower(), xml))
-    entries, documents = [], []
-    for url in sorted(urls):
-        slug = url.rstrip("/").rsplit("/", 1)[1]
-        page = fetcher.text(url, f"mtgazone/page/{slug}.html")
-        published = parse_utc(json_ld_value(page, "datePublished"))
-        author = re.search(r'"author":\{"name":"([^"]+)"', page)
-        author = author.group(1) if author else ""
-        found = [entry("mtgazone", author, next((c for c in candidates if index.match(c)), candidates[0]), raw,
-                       mtgazone_value(raw), published, release) for candidates, raw in mtgazone_entries(page)]
-        entries += found
-        documents.append({"source": "mtgazone", "list_name": author, "id": url, "title": slug, "url": url,
-                          "published_at": iso(published), "updated_at": json_ld_value(page, "dateModified"), "ratings": len(found)})
-    return entries, documents
-
-
-# 17Lands tier lists (Limited Level-Ups, Lords of Limited, Frank Karsten) -------
+# Limited Level-Ups tier lists on 17Lands -------------------------------------
 
 
 def tier_at(history, card_id, when, listed_tier):
@@ -477,11 +297,8 @@ def collect_set(code, config, context):
     names, names_source = seventeen_names(code, release, fetcher, context["data"])
     index = NameIndex(names)
     # Each task is (source, what it reads, function). A tier list task names its list id.
-    tasks = [("cfb", config["cfb"], lambda: collect_cfb(code, config, release, fetcher, context["listing"]))] if config.get("cfb") else []
-    tasks += [("draftsim", code, lambda: collect_draftsim(code, release, fetcher, index)),
-              ("mtgazone", code, lambda: collect_mtgazone(code, release, fetcher, index))]
+    tasks = [("draftsim", code, lambda: collect_draftsim(code, release, fetcher, index))]
     tasks += [("llu", i, lambda i=i, who=who: collect_tier_list("llu", i, who, release, fetcher)) for i, who in config.get("llu", {}).items()]
-    tasks += [(s, config[s], lambda s=s: collect_tier_list(s, config[s], "", release, fetcher)) for s in ("lol", "karsten") if config.get(s)]
 
     entries, documents, failures = [], [], []
     for source, target, task in tasks:
@@ -568,7 +385,7 @@ def main(argv=None):
     if not codes or missing:
         parser.error(f"set codes missing from sets.json: {missing}" if missing else "name at least one set or use --all")
     fetcher = Fetcher(data / "raw", refresh=args.refresh)
-    context = {"fetcher": fetcher, "data": data, "releases": release_times(fetcher), "listing": TcgListing(fetcher)}
+    context = {"fetcher": fetcher, "data": data, "releases": release_times(fetcher)}
     records = []
     for code in codes:
         records.append(collect_set(code, config[code], context))

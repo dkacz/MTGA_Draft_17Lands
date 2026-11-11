@@ -4,6 +4,11 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.34 improves that prediction from the first day after the release.
+It also uses how many copies of each card 17Lands drafters see and take per
+draft, and it reads the grades of the Limited Level-Ups tier lists and the
+Draftsim set review.
+
 Version 4.33 predicts a GIH WR for the cards of a new set that 17Lands has not
 rated yet when a prior file for the set, built from the grades that reviewers
 published before the release, is in the app's RatingPriors folder. A predicted

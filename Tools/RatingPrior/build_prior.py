@@ -9,18 +9,24 @@ PRIOR_DIR/<SET>_prior.json, which the app reads from its RatingPriors folder
 (src/rating_prior.py). The file is private and must stay outside the repository.
 
 Each card's reviewers' score comes from the grades published before the Arena
-release. A source's grades become rank-based normal scores among the cards that
-the source rated, several lists of one source (the ChannelFireball authors, who
-split the set between them, or the Limited Level-Ups hosts) first averaged per
-card. The score is the mean over the sources that rated the card, weighted by
-the source weights of learned_constants.json, scaled to unit standard deviation
-within the set.
+release by the sources that learned_constants.json weights, the Limited
+Level-Ups tier lists and the Draftsim set review. Other sources in the ratings
+table are left out. A source's grades become rank-based normal scores among
+the cards that the source rated, several lists of one source (the Limited
+Level-Ups hosts) first averaged per card. The score is the mean over the
+weighted sources that rated the card, weighted by the source weights, scaled
+to unit standard deviation within the set.
 
-learned_constants.json next to this tool holds the model constants that a
-leave-one-set-out comparison on past sets of the training table fitted
-(build_training_data.py). The tool copies them into the prior file. Each of
-"mean", "scale", "pick_order_weight" and "color_weight" is a list of
-[games, value] points that the app interpolates at the dataset's game count.
+learned_constants.json next to this tool holds the model that a
+leave-one-set-out comparison on past sets of the training table selected
+(build_training_data.py): the constants of the linear model and the model
+trees fitted at snapshots after the release. The tool copies them into the
+prior file. Each of "mean", "scale", "pick_order_weight" and "color_weight" is
+a list of [games, value] points that the app interpolates at the dataset's game
+count. Each entry of "trees" holds the game count of its snapshot, the typical
+GIH WR level there, the names of its inputs and the XGBoost model as JSON.
+Each card also keeps its normal score from every source that rated it, an input
+of the trees.
 """
 
 import argparse
@@ -41,17 +47,20 @@ from src.rating_prior import PRIOR_FILE_SUFFIX, PRIOR_FORMAT, normal_scores  # n
 CONSTANTS = Path(__file__).with_name("learned_constants.json")
 MODEL_KEYS = (
     "mean", "sd", "scale", "pick_order_weight", "color_weight",
-    "pair_games_prior", "pair_persistence",
+    "pair_games_prior", "pair_persistence", "trees",
 )
 
 
-def source_scores(ratings_path):
+def source_scores(ratings_path, sources=None):
     """{source: {card: normal score}} from the grades published before release,
-    the lists of one source averaged per card before ranking."""
+    the lists of one source averaged per card before ranking, only from the
+    named sources when `sources` names any."""
     grades = defaultdict(lambda: defaultdict(list))
     with open(ratings_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row["before_release"] != "true" or not row["grade_value"]:
+                continue
+            if sources is not None and row["source"] not in sources:
                 continue
             grades[row["source"]][row["card_name"]].append(float(row["grade_value"]))
     return {
@@ -62,11 +71,10 @@ def source_scores(ratings_path):
 
 def reviewer_scores(ratings_path, weights=None):
     """{card: (score, number of sources)} from one set's ratings table, each
-    source weighted by weights[source], or all sources equally without weights."""
+    source weighted by weights[source] and a source without a weight left out,
+    or all sources equally without weights."""
     per_card = defaultdict(list)
-    for source, cards in source_scores(ratings_path).items():
-        if weights is not None and source not in weights:
-            raise SystemExit(f"The model constants have no weight for the source {source}")
+    for source, cards in source_scores(ratings_path, weights).items():
         weight = 1.0 if weights is None else float(weights[source])
         for card, score in cards.items():
             per_card[card].append((score, weight))
@@ -88,6 +96,7 @@ def build(code, data_dir, constants_path=CONSTANTS):
         raise SystemExit(f"No ratings table {ratings_path}")
     learned = json.loads(Path(constants_path).read_text(encoding="utf-8"))
     scores = reviewer_scores(ratings_path, learned["source_weights"])
+    per_source = source_scores(ratings_path, learned["source_weights"])
     return {
         "format": PRIOR_FORMAT,
         "set": code,
@@ -96,7 +105,15 @@ def build(code, data_dir, constants_path=CONSTANTS):
         "fitted_on": learned["fitted_on"],
         **{key: learned[key] for key in MODEL_KEYS},
         "cards": {
-            card: {"authors": round(score, 4), "weight": sources}
+            card: {
+                "authors": round(score, 4),
+                "weight": sources,
+                "sources": {
+                    source: round(cards[card], 4)
+                    for source, cards in sorted(per_source.items())
+                    if card in cards
+                },
+            }
             for card, (score, sources) in sorted(scores.items())
         },
     }
@@ -116,7 +133,8 @@ def main(argv=None):
     prior = build(code, args.data, args.constants)
     os.makedirs(args.out, exist_ok=True)
     path = args.out / f"{code}{PRIOR_FILE_SUFFIX}"
-    path.write_text(json.dumps(prior, indent=1, ensure_ascii=False), encoding="utf-8")
+    # The model trees make an indented file several times larger.
+    path.write_text(json.dumps(prior, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(
         f"{path}: {len(prior['cards'])} cards, constants fitted on "
         + ", ".join(prior["fitted_on"])

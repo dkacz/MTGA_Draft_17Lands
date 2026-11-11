@@ -25,10 +25,12 @@ PRIOR = {
 }
 
 
-def card(name, colors=(), gihwr=0.0, samples=0, alsa=0.0, ata=0.0, **pairs):
+def card(name, colors=(), gihwr=0.0, samples=0, alsa=0.0, ata=0.0, counts=None, **pairs):
     deck_colors = {
         "All Decks": {"gihwr": gihwr, "samples": samples, "alsa": alsa, "ata": ata}
     }
+    if counts is not None:
+        deck_colors["All Decks"].update(seen_count=counts[0], pick_count=counts[1])
     for pair, (rate, games) in pairs.items():
         deck_colors[pair] = {"gihwr": rate, "samples": games}
     return {"name": name, "set": "TST", "colors": list(colors), "deck_colors": deck_colors}
@@ -87,7 +89,7 @@ def test_unrated_card_gets_the_prediction_and_rated_card_keeps_its_rate(tmp_path
     assert published["gihwr"] == 57.0 and not is_predicted(published)
     assert published["predicted_gihwr"] == 55.0 - 2.0
     assert overall(data, 2)["gihwr"] == 0.0
-    assert counts == {"predicted": 1, "pairs": 0}
+    assert counts == {"predicted": 1, "pairs": 0, "model": "linear"}
 
 
 def test_pick_order_counts_as_one_more_source(tmp_path):
@@ -132,24 +134,24 @@ def pair_values(data, pair):
     return {c["name"]: c["deck_colors"].get(pair) for c in data["card_ratings"].values()}
 
 
-def test_pair_values_fill_from_the_overall_rate_and_the_pairs_shift(tmp_path):
+def test_pair_values_without_the_pairs_game_counts_take_the_overall_rate(tmp_path):
     write_prior(tmp_path, {"Unrated": {"authors": 0.0}})
     data = dataset(*pair_cards())
     counts = apply_rating_prior(data, tmp_path)
     wu, ub = pair_values(data, "WU"), pair_values(data, "UB")
 
     assert wu["WU0"] == {"gihwr": 57.0, "samples": 500}
-    assert wu["Gold"]["gihwr"] == 62.0  # 10 cards in both colors: +2
-    # Groups below 10 cards without the pairs' game counts get no shift.
+    # The cards with both rates in a pair do not shift the others.
+    assert wu["Gold"]["gihwr"] == 60.0
     assert wu["Red"]["gihwr"] == 50.0
     assert wu["Unrated"]["gihwr"] == 55.0
     # UB has rows only for Red, so every card gets its overall rate there.
     assert ub["Gold"]["gihwr"] == 60.0 and ub["WU0"]["gihwr"] == 55.0
     assert all(is_predicted(v[n]) for v in (wu, ub) for n in ("Gold", "Red", "Unrated"))
-    assert counts == {"predicted": 1, "pairs": 3 + 16}
+    assert counts["pairs"] == 3 + 16
 
 
-def test_small_groups_take_the_shift_from_the_pair_strength(tmp_path):
+def test_pair_values_take_the_shift_from_the_pair_strength(tmp_path):
     write_prior(tmp_path, {"Unrated": {"authors": 0.0}})
     rates = {"WU": 56.0, "UB": 52.0, "WB": 54.0}
     games = {"WU": 1000, "UB": 1000, "WB": 2000}
@@ -157,12 +159,105 @@ def test_small_groups_take_the_shift_from_the_pair_strength(tmp_path):
     apply_rating_prior(data, tmp_path)
     wu, ub = pair_values(data, "WU"), pair_values(data, "UB")
 
-    # Pair strength: WU +0.5, UB -0.5, W (from WU and WB) +1/6, R none.
-    assert wu["Gold"]["gihwr"] == 62.0  # the group of 10 keeps its own shift
+    # Pair strength: WU +0.5, UB -0.5, W (from WU and WB) +1/6, R none. A card
+    # keeps the strength of its own colors that its overall rate already has.
+    assert wu["Gold"]["gihwr"] == 60.0
     assert wu["Red"]["gihwr"] == pytest.approx(50.5)
     assert wu["Unrated"]["gihwr"] == pytest.approx(55.0 + 1 / 6 + 0.5 - 1 / 6, abs=0.01)
     assert ub["Gold"]["gihwr"] == pytest.approx(60.0 - 0.5 - 0.5)
     assert ub["W0"]["gihwr"] == pytest.approx(55.0 - 0.5 - 1 / 6, abs=0.01)
+
+
+def tree_model(trees, base=0.0, inputs=1):
+    """An XGBoost regression model as JSON. trees: lists of nodes (input
+    index, threshold or leaf value, left child, right child, missing goes left)."""
+    return {"learner": {
+        "objective": {"name": "reg:squarederror"},
+        "learner_model_param": {"base_score": f"[{base}]", "num_feature": str(inputs), "num_target": "1"},
+        "gradient_booster": {"name": "gbtree", "model": {"trees": [{
+            "split_indices": [n[0] for n in nodes],
+            "split_conditions": [n[1] for n in nodes],
+            "left_children": [n[2] for n in nodes],
+            "right_children": [n[3] for n in nodes],
+            "default_left": [int(n[4]) for n in nodes],
+            "split_type": [0] * len(nodes),
+        } for nodes in trees]}},
+    }}
+
+
+# Copies picked per draft below 3: -2 points, else and when missing +2.
+PICK_TREE = tree_model([[(0, 3.0, 1, 2, False), (0, -2.0, -1, -1, False), (0, 2.0, -1, -1, False)]])
+
+
+def test_tree_output_follows_thresholds_and_missing_inputs():
+    model = tree_model([
+        [(0, 0.5, 1, 2, True), (0, -1.0, -1, -1, False), (1, 0.0, 3, 4, False),
+         (0, 0.25, -1, -1, False), (0, 0.75, -1, -1, False)],
+        [(1, 2.0, 1, 2, False), (0, 0.1, -1, -1, False), (0, 0.2, -1, -1, False)],
+    ], base=0.5, inputs=2)
+    booster = rating_prior._booster(model, 2)
+    output = rating_prior._tree_output
+    assert output(booster, [0.4, 1.0]) == pytest.approx(0.5 - 1.0 + 0.1)
+    # A value equal to the threshold goes right, as in XGBoost.
+    assert output(booster, [0.5, 0.0]) == pytest.approx(0.5 + 0.75 + 0.1)
+    assert output(booster, [0.9, -1.0]) == pytest.approx(0.5 + 0.25 + 0.1)
+    # Missing inputs follow each node's default child.
+    assert output(booster, [None, None]) == pytest.approx(0.5 - 1.0 + 0.2)
+    with pytest.raises(ValueError):
+        rating_prior._booster(model, 3)
+
+
+def test_copies_per_draft_divide_by_the_drafts_from_all_picks():
+    cards = {"A": card("A", counts=(300, 80)), "B": card("B", counts=(100, 4)), "C": card("C")}
+    per_draft = rating_prior._per_draft_counts(cards)
+    # 84 picks of all cards make 2 drafts of 42 picks.
+    assert per_draft == {"A": (150.0, 40.0), "B": (50.0, 2.0)}
+    assert rating_prior._per_draft_counts({"C": card("C")}) == {}
+
+
+def write_tree_prior(folder, inputs=("picked_per_draft",)):
+    cards = {"A": {"authors": 1.0, "weight": 1, "sources": {"llu": 1.0}},
+             "B": {"authors": -1.0, "weight": 1, "sources": {}}}
+    trees = [{"games": 1000, "level": 56.0, "inputs": list(inputs), "model": PICK_TREE}]
+    write_prior(folder, cards, trees=trees)
+
+
+def tree_dataset(games, counts=True):
+    data = dataset(
+        card("A", counts=(300, 80) if counts else None),
+        card("B", counts=(100, 4) if counts else None),
+    )
+    data["meta"]["game_count"] = games
+    return data
+
+
+def test_trees_interpolate_from_the_release_day_linear_model(tmp_path):
+    write_tree_prior(tmp_path)
+    # Halfway to the trees' snapshot: half the release-day linear model (55 +
+    # 4 * 0.5 * score) and half the trees (56 +/- 2).
+    data = tree_dataset(500)
+    assert apply_rating_prior(data, tmp_path)["model"] == "trees"
+    assert overall(data, 0)["gihwr"] == pytest.approx((57.0 + 58.0) / 2)
+    assert overall(data, 1)["gihwr"] == pytest.approx((53.0 + 54.0) / 2)
+    # Beyond the last snapshot the last trees predict alone.
+    data = tree_dataset(5000)
+    apply_rating_prior(data, tmp_path)
+    assert [overall(data, i)["gihwr"] for i in (0, 1)] == [58.0, 54.0]
+
+
+def test_linear_model_predicts_on_release_day_and_without_the_counts(tmp_path):
+    write_tree_prior(tmp_path)
+    for data in (tree_dataset(0), tree_dataset(5000, counts=False)):
+        assert apply_rating_prior(data, tmp_path)["model"] == "linear"
+        assert [overall(data, i)["gihwr"] for i in (0, 1)] == [57.0, 53.0]
+
+
+def test_prior_with_unusable_trees_is_ignored(tmp_path):
+    write_tree_prior(tmp_path, inputs=["drafts"])
+    assert rating_prior.load_prior("TST", tmp_path) is None
+    write_prior(tmp_path, {"A": {"authors": 1.0}},
+                trees=[{"games": 1000, "level": 56.0, "inputs": ["picked_per_draft"], "model": PICK_TREE}])
+    assert rating_prior.load_prior("TST", tmp_path) is None
 
 
 def test_dataset_load_applies_the_prior_from_the_prior_folder(tmp_path, monkeypatch):
@@ -215,6 +310,17 @@ def test_predicted_values_are_marked_and_still_sort_as_numbers():
     assert format_win_rate(57.25, "All Decks", "gihwr", None, "Percentage", predicted=True) == "~57.2"
     assert format_win_rate(0.0, "All Decks", "gihwr", None, "Percentage", predicted=True) == "-"
     assert field_process_sort("~57.2") == (1, 57.2)
+
+
+def test_card_ratings_download_keeps_the_copies_seen_and_picked():
+    client = Seventeenlands()
+    cards = {}
+    rows = [{"name": "A", "avg_seen": 3.47, "seen_count": 827, "pick_count": 158}]
+    client._process_archetype_data("All", client._unwrap_card_payload(rows), cards)
+    stats = cards["A"]["deck_colors"]["All Decks"]
+    assert (stats["seen_count"], stats["pick_count"], stats["alsa"]) == (827, 158, 3.47)
+    with pytest.raises(ValueError):
+        client._unwrap_card_payload([{"name": "A", "pick_count": -1}])
 
 
 def test_color_ratings_download_keeps_each_archetypes_game_count():

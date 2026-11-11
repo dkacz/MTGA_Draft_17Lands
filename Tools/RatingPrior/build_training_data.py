@@ -16,12 +16,16 @@ two-color pair and snapshot. The tables are private and stay outside the
 repository. Both files are streamed line by line and only the needed columns
 are kept, so memory does not grow with the size of a set.
 
-The release is the earliest draft_time in the set's game data. A snapshot at
-day d counts what 17Lands could show at release + d days: the drafts whose
-draft_time and the games whose game_time are earlier, and d = 0 has no data.
-The target counts the games drafted from 7 to 31 days after the release, that
-is on days 8 to 31. When the game data ends earlier, the target columns stay
-empty and target_window_incomplete is true. Definitions follow 17Lands:
+The release is the Arena release time that collect_ratings.py took from the
+start_dates of the 17Lands filters, recorded as release_at in
+DATA_DIR/ratings/<SET>.sources.json. A snapshot at day d counts what 17Lands
+could show at release + d days: the drafts whose draft_time and the games whose
+game_time fall between the release and that time, and d = 0 has no data. Drafts
+and games before the release, such as the early-access drafts of LCI, count
+nowhere, because 17Lands shows a set's data from its start date on. The target
+counts the games drafted from 7 to 31 days after the release, that is on days
+8 to 31. When the game data ends earlier, the target columns stay empty and
+target_window_incomplete is true. Definitions follow 17Lands:
 
 - GIH WR is the win rate of the games in which the card was in the opening hand
   or drawn later (opening_hand_<card> or drawn_<card> above 0; a card only
@@ -52,11 +56,12 @@ import argparse
 import bisect
 import csv
 import gzip
+import json
 import sys
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from itertools import compress
 from operator import itemgetter
@@ -76,10 +81,11 @@ SOURCES = ("cfb", "draftsim", "mtgazone", "llu", "lol", "karsten")
 # of the tables, because picking one is no drafting decision.
 BASIC_LANDS = {"Plains", "Island", "Swamp", "Mountain", "Forest"}
 
-# Disjoint periods of draft_time in days after the release. A snapshot sums
-# the periods that end by its day, and the target sums those inside TARGET_DAYS.
+# Disjoint periods of draft_time in days after the release, the first one
+# starting at the release. A snapshot sums the periods that end by its day, and
+# the target sums those inside TARGET_DAYS.
 EDGES = sorted(set(SNAPSHOT_DAYS[1:]) | set(TARGET_DAYS))
-STARTS = [float("-inf")] + EDGES[:-1]
+STARTS = [0] + EDGES[:-1]
 SNAPSHOT_PERIODS = {d: [p for p, end in enumerate(EDGES) if end <= d] for d in SNAPSHOT_DAYS}
 TARGET_PERIODS = [
     p for p, (start, end) in enumerate(zip(STARTS, EDGES))
@@ -183,12 +189,26 @@ def set_cards(game_path, draft_path):
     return list(dict.fromkeys(names))
 
 
+def release_time(data_dir, code):
+    """The Arena release that collect_ratings.py recorded for the set, as a
+    naive UTC time like the draft_time and game_time of the public data."""
+    path = data_dir / "ratings" / f"{code}.sources.json"
+    try:
+        text = json.loads(path.read_text(encoding="utf-8"))["release_at"]
+    except (OSError, ValueError, KeyError) as error:
+        raise SystemExit(f"No release time for {code} in {path}: {error!r}")
+    return datetime.fromisoformat(text).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def period_finder(release):
-    """Time text -> index of its period, or None from the last edge on."""
+    """Time text -> index of its period, or None before the release and from
+    the last edge on."""
 
     @lru_cache(maxsize=1 << 16)
     def period(text):
         days = (datetime.fromisoformat(text) - release).total_seconds() / 86400
+        if days < 0:
+            return None
         p = bisect.bisect_right(EDGES, days)
         return p if p < len(EDGES) else None
 
@@ -347,8 +367,8 @@ def published(wins, games):
 def build_set(code, data_dir):
     started = time.monotonic()
     game_path, draft_path = data_paths(data_dir, code)
-    release_text, last_text = draft_time_range(game_path)
-    release = datetime.fromisoformat(release_text)
+    release = release_time(data_dir, code)
+    first_text, last_text = draft_time_range(game_path)
     days_of_data = (datetime.fromisoformat(last_text) - release).total_seconds() / 86400
     incomplete = days_of_data < TARGET_DAYS[1]
     cards = set_cards(game_path, draft_path)
@@ -428,7 +448,8 @@ def build_set(code, data_dir):
                     ])
     return {
         "set": code,
-        "release": release_text,
+        "release": release.isoformat(sep=" "),
+        "first_draft_in_game_data": first_text,
         "first_draft_in_draft_data": acc["first_draft_time"],
         "last_draft_in_game_data": last_text,
         "days_in_game_data": round(days_of_data, 1),

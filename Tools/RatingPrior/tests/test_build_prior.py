@@ -20,10 +20,10 @@ def write_ratings(path, rows):
 
 def test_lists_of_one_source_are_pooled_before_ranking(tmp_path):
     path = tmp_path / "X.csv"
-    # Two ChannelFireball authors split the set, one Draftsim list covers it.
+    # Two Limited Level-Ups hosts split the set, one Draftsim list covers it.
     write_ratings(path, [
-        ("A", "cfb", "LSV", 4.0, "true"), ("B", "cfb", "LSV", 1.0, "true"),
-        ("C", "cfb", "Reid", 3.0, "true"), ("D", "cfb", "Reid", 2.0, "true"),
+        ("A", "llu", "Marc", 4.0, "true"), ("B", "llu", "Marc", 1.0, "true"),
+        ("C", "llu", "Alex", 3.0, "true"), ("D", "llu", "Alex", 2.0, "true"),
         ("A", "draftsim", "Quinn", 9, "true"), ("B", "draftsim", "Quinn", 2, "true"),
         ("C", "draftsim", "Quinn", 7, "true"), ("D", "draftsim", "Quinn", 5, "true"),
         ("D", "draftsim", "Quinn", 1, "false"), ("E", "mtgazone", "Icky", "", "true"),
@@ -31,7 +31,7 @@ def test_lists_of_one_source_are_pooled_before_ranking(tmp_path):
     scores = bp.reviewer_scores(path)
     assert set(scores) == {"A", "B", "C", "D"}
     assert [scores[c][1] for c in "ABCD"] == [2, 2, 2, 2]
-    # Both sources rank the cards A > C > D > B. Ranked per author, C would tie A.
+    # Both sources rank the cards A > C > D > B. Ranked per host, C would tie A.
     assert scores["A"][0] > scores["C"][0] > scores["D"][0] > scores["B"][0]
     values = [s for s, _ in scores.values()]
     assert statistics.pstdev(values) == pytest.approx(1.0)
@@ -51,8 +51,9 @@ def test_source_weights_set_each_source_s_share_of_the_score(tmp_path):
     scores = bp.reviewer_scores(path, {"draftsim": 0.9, "mtgazone": 0.1})
     assert scores["A"][0] > scores["B"][0] > scores["C"][0]
     assert scores["A"][1] == 2
-    with pytest.raises(SystemExit):
-        bp.reviewer_scores(path, {"draftsim": 1.0})
+    # A source without a weight is left out.
+    alone = bp.reviewer_scores(path, {"draftsim": 1.0})
+    assert alone["A"][0] > alone["B"][0] > alone["C"][0] and alone["A"][1] == 1
 
 
 def test_build_writes_the_learned_constants_into_a_prior_the_app_reads(tmp_path):
@@ -72,4 +73,5 @@ def test_build_writes_the_learned_constants_into_a_prior_the_app_reads(tmp_path)
         assert prior[key] == learned[key]
     assert prior["fitted_on"] == learned["fitted_on"]
     best = max(card["authors"] for card in prior["cards"].values())
-    assert prior["cards"]["Card 9"] == {"authors": best, "weight": 1}
+    top = max(card["sources"]["draftsim"] for card in prior["cards"].values())
+    assert prior["cards"]["Card 9"] == {"authors": best, "weight": 1, "sources": {"draftsim": top}}

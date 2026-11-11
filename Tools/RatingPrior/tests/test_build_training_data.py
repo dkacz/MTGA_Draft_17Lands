@@ -1,5 +1,6 @@
 import csv
 import gzip
+import json
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -71,11 +72,14 @@ def test_alsa_counts_each_copy_at_the_last_sight_of_its_pack():
     assert acc["anomalies"]["first sight of a pack missing"] == 6 + 7
 
 
-def write_set(data, code, games):
-    """Writes a set's game data, one draft file and a ratings table. games:
-    (draft day, played day, main colors, won, {card: (opening, drawn, tutored)})."""
+def write_set(data, code, games, release_day=0):
+    """Writes a set's game data, one draft file, a ratings table and the
+    release time that collect_ratings.py records. games: (draft day, played
+    day, main colors, won, {card: (opening, drawn, tutored)})."""
     (data / "17lands_public").mkdir(parents=True, exist_ok=True)
     (data / "ratings").mkdir(exist_ok=True)
+    release = (RELEASE + timedelta(days=release_day)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (data / "ratings" / f"{code}.sources.json").write_text(json.dumps({"release_at": release}))
     game_path, draft_path = btd.data_paths(data, code)
     game_header = ["expansion", "draft_id", "draft_time", "game_time", "main_colors", "splash_colors", "won"]
     for name in CARDS:
@@ -185,3 +189,27 @@ def test_a_set_whose_data_ends_before_the_target_window_has_no_target(tmp_path):
     wu = pairs[("Alpha", "WU", "7")]
     assert wu["target_window_incomplete"] == "true" and wu["pair_games"] == "1"
     assert all(wu[k] == "" for k in btd.PAIR_COLUMNS if k.startswith("target_") and k != "target_window_incomplete")
+
+
+def test_snapshots_start_at_the_recorded_release_and_skip_earlier_data(tmp_path):
+    data = tmp_path / "data"
+    # The release is 6 hours after the first draft, as with early-access drafts.
+    write_set(data, "XYZ", GAMES, release_day=0.25)
+
+    summary = btd.build_set("XYZ", data)
+    assert summary["release"] == at(0.25) and summary["first_draft_in_game_data"] == at(0)
+    rows = read_rows(data / "features" / "XYZ.csv", "card_name", "snapshot_day")
+    alpha = {d: rows[("Alpha", str(d))] for d in btd.SNAPSHOT_DAYS}
+    # The game played at day 0.1 is before the release and counts nowhere.
+    assert [alpha[d]["set_games"] for d in btd.SNAPSHOT_DAYS] == ["0", "1", "1", "1", "2"]
+    assert [alpha[d]["gih_games"] for d in btd.SNAPSHOT_DAYS] == ["0", "1", "1", "1", "1"]
+    # The target window moves with the release: drafts at days 10 and 20 stay in it.
+    assert alpha[0]["target_gih_games"] == "2"
+
+
+def test_a_set_without_a_recorded_release_stops_the_build(tmp_path):
+    data = tmp_path / "data"
+    write_set(data, "XYZ", GAMES)
+    (data / "ratings" / "XYZ.sources.json").unlink()
+    with pytest.raises(SystemExit):
+        btd.build_set("XYZ", data)
