@@ -37,27 +37,39 @@ def test_lists_of_one_source_are_pooled_before_ranking(tmp_path):
     assert statistics.pstdev(values) == pytest.approx(1.0)
 
 
-def test_build_calibrates_on_past_sets_and_writes_a_prior_the_app_reads(tmp_path):
-    data, sets = tmp_path / "data", tmp_path / "Sets"
+def test_source_weights_set_each_source_s_share_of_the_score(tmp_path):
+    path = tmp_path / "X.csv"
+    # Draftsim ranks the cards A > B > C, MTG Arena Zone B > C > A.
+    write_ratings(path, [
+        ("A", "draftsim", "Quinn", 9, "true"), ("B", "draftsim", "Quinn", 5, "true"),
+        ("C", "draftsim", "Quinn", 1, "true"),
+        ("A", "mtgazone", "Icky", 1, "true"), ("B", "mtgazone", "Icky", 5, "true"),
+        ("C", "mtgazone", "Icky", 3, "true"),
+    ])
+    equal = bp.reviewer_scores(path)
+    assert equal["B"][0] > equal["A"][0] > equal["C"][0]
+    scores = bp.reviewer_scores(path, {"draftsim": 0.9, "mtgazone": 0.1})
+    assert scores["A"][0] > scores["B"][0] > scores["C"][0]
+    assert scores["A"][1] == 2
+    with pytest.raises(SystemExit):
+        bp.reviewer_scores(path, {"draftsim": 1.0})
+
+
+def test_build_writes_the_learned_constants_into_a_prior_the_app_reads(tmp_path):
+    data = tmp_path / "data"
     (data / "ratings").mkdir(parents=True)
-    sets.mkdir()
     names = [f"Card {i}" for i in range(40)]
-    for code in ("OLD", "NEW"):
-        write_ratings(data / "ratings" / f"{code}.csv", [
-            (name, "draftsim", "Quinn", i % 10, "true") for i, name in enumerate(names)
-        ])
-    cards = {
-        str(i): {"name": name, "deck_colors": {"All Decks": {"gihwr": 50.0 + (i % 10)}}}
-        for i, name in enumerate(names)
-    }
-    (sets / "OLD_PremierDraft_All_Data.json").write_text(json.dumps({"card_ratings": cards}))
+    write_ratings(data / "ratings" / "NEW.csv", [
+        (name, "draftsim", "Quinn", i % 10, "true") for i, name in enumerate(names)
+    ])
+    learned = json.loads(bp.CONSTANTS.read_text(encoding="utf-8"))
     out = tmp_path / "RatingPriors"
 
-    bp.main(["--data", str(data), "--datasets", str(sets), "--out", str(out), "new"])
+    bp.main(["--data", str(data), "--out", str(out), "new"])
 
     prior = load_prior("NEW", out)
-    assert list(prior["calibration"]["sets"]) == ["OLD"]
-    assert prior["mean"] == pytest.approx(54.5)
-    assert prior["sd"] == pytest.approx(statistics.pstdev(range(10)), abs=1e-3)
-    assert prior["scale"] > 0.95
-    assert prior["cards"]["Card 9"]["weight"] == 1
+    for key in bp.MODEL_KEYS:
+        assert prior[key] == learned[key]
+    assert prior["fitted_on"] == learned["fitted_on"]
+    best = max(card["authors"] for card in prior["cards"].values())
+    assert prior["cards"]["Card 9"] == {"authors": best, "weight": 1}

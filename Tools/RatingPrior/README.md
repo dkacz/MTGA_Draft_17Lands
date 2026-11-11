@@ -4,8 +4,8 @@
 set is released on MTG Arena, and `build_prior.py` turns them into the prior
 file from which the app predicts GIH WR for cards that 17Lands has not rated
 yet (`src/rating_prior.py`). `build_training_data.py` builds the table from
-which a later model learns the weights of the prior. Nothing in `src/` imports
-these tools.
+which the model constants in `learned_constants.json` were fitted. Nothing in
+`src/` imports these tools.
 `collect_ratings.py` needs only the Python standard library, and
 `build_prior.py` also imports `src/rating_prior.py`.
 
@@ -82,16 +82,16 @@ python Tools/RatingPrior/build_prior.py --data DATA_DIR --out PRIOR_DIR TRK
 The app reads `<SET>_prior.json` from its `RatingPriors` folder next to `Sets`:
 `~/Library/Application Support/MTGA_Draft_Tool/RatingPriors` on macOS,
 `~/.config/MTGA_Draft_Tool/RatingPriors` on Linux and the app's folder on
-Windows. Dataset sync never writes there. `--datasets` names the folder with
-the app's downloaded datasets (on macOS `.../MTGA_Draft_Tool/Sets` by default),
-which the tool only reads.
+Windows. Dataset sync never writes there. `--constants` names the file of
+model constants, `learned_constants.json` next to the tool by default.
 
 For each card the file holds `authors`, the reviewers' score, and `weight`, the
 number of sources that rated the card. A source's grades become rank-based
 normal scores among the cards that the source rated, after the lists of one
 source (the ChannelFireball authors, who split the set between them, or the
 Limited Level-Ups hosts) are averaged per card. The score is the mean over the
-sources, scaled to unit standard deviation within the set.
+sources, each weighted by its `source_weights` entry in
+`learned_constants.json`, scaled to unit standard deviation within the set.
 
 The app predicts a card's GIH WR as `mean + sd * scale * z + color_weight *
 color`. `z` is the reviewers' score, or, when the dataset has the card's ALSA
@@ -113,17 +113,22 @@ colorless or outside the pair) that have both rates. A group with fewer than
 own colors, computed as for `color` above, and 0 without the pairs' game
 counts.
 
-`build_prior.py` writes the stage 1 constants. `mean` and `sd` are the averages
-over past sets of the mean and standard deviation of card GIH WR, and `scale`
-is the correlation of the reviewers' score with GIH WR, weighted by cards. The
-past sets are those with both a ratings table and an app dataset
-`<SET>_PremierDraft_All_Data.json`, listed under `calibration`.
-`pick_order_weight` is 1, so the pick order counts as one more source,
-`color_weight` is 1, `pair_games_prior` is 1000 and `pair_persistence` is 0.49.
-A learned model can replace these values in the same file. Each of `mean`,
-`sd`, `scale`, `pick_order_weight` and `color_weight` may also be a list of
-`[games, value]` points, which the app interpolates at the dataset's game
-count.
+`build_prior.py` copies the model constants from `learned_constants.json`:
+`mean`, `sd`, `scale`, `pick_order_weight`, `color_weight`,
+`pair_games_prior` and `pair_persistence`, and records the past sets they were
+fitted on under `fitted_on`. Each of `mean`, `scale`, `pick_order_weight` and
+`color_weight` is a list of `[games, value]` points, which the app interpolates
+at the dataset's game count. The points sit at the median game count of past
+sets on the day of the Arena release and 1, 2, 3 and 7 days later. The
+constants were fitted by a leave-one-set-out comparison on 16 past sets of the
+training table below. The model predicts a card's deviation from its set's
+mean GIH WR on days 8 to 31, weighted by games in hand, and `mean` adds the
+typical such mean of past sets together with the typical amount by which the
+GIH WR published at that moment is higher. `pair_persistence` 0.49 is the
+share of a pair's win-rate deviation in the first 24 hours that remained from
+day 8 on in 17 past sets of the 17Lands public game data (correlation 0.70),
+and the comparison kept it with `pair_games_prior` 1000. The file holds
+constants only, no card data.
 
 ## Build the training table
 
@@ -157,6 +162,9 @@ cost, so a color that appears only in the rules text counts too. `set_drafts`
 and `set_games` count the set's drafts and games in the snapshot. `alsa` and
 `ata` are averaged over `alsa_seen` copies seen and `ata_picked` picks, and
 `drafts_seen` and `drafts_picked` count the drafts that saw or picked the card.
+The table gives ALSA and ATA from the first copy, while the 17Lands card
+ratings give them only from about 200 copies seen or picked (TRK on 11
+November 2026), so a model of what the app holds leaves out smaller counts.
 `gih_games` and `gih_wr_raw` are the card's games in hand and GIH WR in the
 snapshot, and `gih_wr` is the value that 17Lands would show, empty below 500
 games in hand. `target_gih_games` and `target_gih_wr` are the same over the

@@ -1,0 +1,13 @@
+{
+ "model": "stage 2: learned weighted mean of the reviewer sources and the pick order",
+ "fitted_on": ["BLB", "DFT", "DSK", "ECL", "EOE", "FDN", "FIN", "LCI", "MH3", "MKM", "MSH", "OTJ", "SOS", "TDM", "TLA", "TMT"],
+ "fitted": "2026-11-11, analysis/model_selection.py of the mtg-tier-consensus project",
+ "source_weights": {"cfb": 3.00739e-07, "draftsim": 0.024784, "mtgazone": 0.0340817, "llu": 0.838053, "lol": 0.0379372, "karsten": 0.0651439},
+ "mean": [[0, 56.695], [40702, 56.7921], [83004, 56.6121], [121176, 56.583], [257160, 56.478]],
+ "sd": 2.6195,
+ "scale": [[0, 0.7341], [40702, 0.8694], [83004, 0.9132], [121176, 0.9183], [257160, 0.9347]],
+ "pick_order_weight": [[0, 0.0], [40702, 0.8353], [83004, 1.3524], [121176, 1.521], [257160, 2.0666]],
+ "color_weight": [[0, 0.0], [40702, 0.8316], [83004, 0.7832], [121176, 0.7779], [257160, 0.7376]],
+ "pair_games_prior": 1000,
+ "pair_persistence": 0.49
+}
