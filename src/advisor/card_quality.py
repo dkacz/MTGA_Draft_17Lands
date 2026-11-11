@@ -1,11 +1,15 @@
 """Observed win-rate estimates shared by pack and deck scoring.
 
-The output stays in percentage points. Missing published win rates remain zero;
-no tier list or invented rating is injected into the draft advisor.
+The output stays in percentage points. Missing published win rates remain zero
+unless the set has a rating prior: then src/rating_prior.py fills them with a
+predicted GIH WR marked by the PREDICTED period. A prediction is already an
+expected rate, so it is used as it is. No tier list is injected into the draft
+advisor.
 """
 
 import math
 
+from src import constants
 from src.utils import normalize_color_string
 
 SAMPLE_PRIOR = 1000.0
@@ -42,6 +46,16 @@ def sample_count(stats):
 FALLBACK_SAMPLE_CAP = 500
 
 
+def is_predicted(stats, field=constants.DATA_FIELD_GIHWR):
+    """True when the stats' GIH WR is a prediction of src/rating_prior.py,
+    not a 17Lands value."""
+    return (
+        field == constants.DATA_FIELD_GIHWR
+        and isinstance(stats, dict)
+        and stats.get("period") == constants.PREDICTED_PERIOD
+    )
+
+
 def sample_weight(stats):
     samples = sample_count(stats)
     if stats.get("period"):
@@ -63,14 +77,20 @@ def blended_win_rate(card, archetype="All Decks", archetype_weight=0.0, mean=54.
     if global_wr <= 0.0:
         return arch_wr
 
-    confidence = sample_weight(global_stats)
-    global_estimate = (
-        mean + confidence * (global_wr - mean)
-        if sample_count(global_stats) > 0
-        else global_wr
-    )
+    if is_predicted(global_stats) or sample_count(global_stats) == 0:
+        global_estimate = global_wr
+    else:
+        # A small sample leans toward the card's predicted GIH WR when the set
+        # has a rating prior (src/rating_prior.py), else toward the set mean.
+        anchor = float(global_stats.get("predicted_gihwr") or mean)
+        global_estimate = anchor + sample_weight(global_stats) * (global_wr - anchor)
     if normalize_color_string(archetype) == "All Decks" or arch_wr <= 0.0:
         return global_estimate
 
-    weight = min(1.0, max(0.0, archetype_weight)) * sample_weight(arch_stats)
+    weight = min(1.0, max(0.0, archetype_weight))
+    if is_predicted(arch_stats):
+        # A predicted pair rate is the card's overall rate plus the pair's
+        # shift, so only the shift moves the estimate.
+        return global_estimate + weight * (arch_wr - global_wr)
+    weight *= sample_weight(arch_stats)
     return global_estimate + weight * (arch_wr - global_estimate)

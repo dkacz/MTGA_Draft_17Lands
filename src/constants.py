@@ -32,9 +32,9 @@ def get_resource_dir():
 BASE_DIR = get_base_dir()
 RESOURCE_DIR = get_resource_dir()
 
-APPLICATION_VERSION = "4.32"
-OLD_APPLICATION_VERSION = "4.31"
-PREVIOUS_APPLICATION_VERSION = "0431"
+APPLICATION_VERSION = "4.33"
+OLD_APPLICATION_VERSION = "4.32"
+PREVIOUS_APPLICATION_VERSION = "0432"
 
 FONT_SANS_SERIF = "Arial"
 FONT_MONO_SPACE = "Courier"
@@ -396,6 +396,10 @@ LOCAL_CARDS_KEY_PRIMARY = "isprimarycard"
 SETS_FOLDER = os.path.join(BASE_DIR, "Sets")
 SET_FILE_SUFFIX = "Data.json"
 
+# Prior files (<SET>_prior.json) with the reviewers' pre-release card ratings,
+# built by Tools/RatingPrior/build_prior.py. Dataset sync never writes here.
+RATING_PRIOR_FOLDER = os.path.join(BASE_DIR, "RatingPriors")
+
 SCRYFALL_REQUEST_BACKOFF_DELAY_SECONDS = 5
 SCRYFALL_REQUEST_ATTEMPT_MAX = 5
 
@@ -490,6 +494,10 @@ TIME_PERIOD_DEFAULT = "ALL_TIME"
 # cube edition otherwise starts with almost no published GIH WR, while
 # all-time data alone includes cards removed from the cube.
 TIME_PERIOD_SOURCES = {"LATEST_WITH_ALL_TIME": ("LATEST_EVENT", "ALL_TIME")}
+# The period of a GIH WR that src/rating_prior.py predicted for a card that
+# 17Lands has not rated yet. The interface marks such a value, and the advisor
+# uses it without shrinking it again (src/advisor/card_quality.py).
+PREDICTED_PERIOD = "PREDICTED"
 TIME_PERIOD_CUBE_DEFAULT = "LATEST_WITH_ALL_TIME"
 
 

@@ -12,6 +12,7 @@ from src.ui.styles import Theme
 from src.utils import open_file
 from src.ui.components import ManaCurvePlot, TypePieChart, VerticalScrolledFrame
 from src.card_logic import get_deck_metrics, identify_top_pairs
+from src.rating_prior import is_predicted
 
 
 class DraftRecapScreen(ttk.Frame):
@@ -202,6 +203,11 @@ class DraftRecapScreen(ttk.Frame):
                 c.get("deck_colors", {}).get("All Decks", {}).get("gihwr", 0.0)
             )
 
+        def gihwr_text(c):
+            """The card's GIH WR for a list line, "~" marking a prediction."""
+            overall = c.get("deck_colors", {}).get("All Decks", {})
+            return f"{'~' if is_predicted(overall) else ''}{get_gihwr(c):.1f}%"
+
         valid_cards = [
             c
             for c in taken_cards
@@ -269,7 +275,7 @@ class DraftRecapScreen(ttk.Frame):
         # 3. BEST CARDS
         best_text = "".join(
             [
-                f"• {c.get('name', 'Unknown')} ({get_gihwr(c):.1f}%)\n"
+                f"• {c.get('name', 'Unknown')} ({gihwr_text(c)})\n"
                 for c in top_23[:6]
             ]
         )
@@ -367,7 +373,7 @@ class DraftRecapScreen(ttk.Frame):
         staples.sort(key=get_gihwr, reverse=True)
         self.lbl_synergy_staples.config(
             text="".join(
-                [f"• {c.get('name')} ({get_gihwr(c):.1f}%)\n" for c in staples[:6]]
+                [f"• {c.get('name')} ({gihwr_text(c)})\n" for c in staples[:6]]
             )
             or "No premium staples drafted."
         )
@@ -375,7 +381,7 @@ class DraftRecapScreen(ttk.Frame):
         non_basics.sort(key=get_gihwr, reverse=True)
         self.lbl_synergy_lands.config(
             text="".join(
-                [f"• {c.get('name')} ({get_gihwr(c):.1f}%)\n" for c in non_basics[:6]]
+                [f"• {c.get('name')} ({gihwr_text(c)})\n" for c in non_basics[:6]]
             )
             or "No non-basic lands drafted."
         )
@@ -389,7 +395,7 @@ class DraftRecapScreen(ttk.Frame):
         rares.sort(key=get_gihwr, reverse=True)
         self.lbl_recap_rares.config(
             text="".join(
-                [f"• {c.get('name')} ({get_gihwr(c):.1f}%)\n" for c in rares[:10]]
+                [f"• {c.get('name')} ({gihwr_text(c)})\n" for c in rares[:10]]
             )
             or "No Rares or Mythics drafted."
         )

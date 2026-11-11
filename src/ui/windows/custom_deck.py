@@ -29,7 +29,12 @@ from src.card_logic import (
     get_functional_cmc,
 )
 from src.ui.styles import Theme
-from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.components import (
+    DynamicTreeviewManager,
+    CardToolTip,
+    AutoScrollbar,
+    card_row_tags,
+)
 from src.utils import bind_scroll, normalize_color_string
 
 
@@ -1337,6 +1342,7 @@ class CustomDeckPanel(ttk.Frame):
             active_filter = "All Decks"
 
         from src.card_logic import format_win_rate, row_color_tag
+        from src.rating_prior import is_predicted
 
         def populate_tree(manager, source_list, is_sb):
             tree = manager.tree
@@ -1401,6 +1407,7 @@ class CustomDeckPanel(ttk.Frame):
                                 field,
                                 metrics,
                                 self.configuration.settings.result_format,
+                                predicted=is_predicted(stats, field),
                             )
                         )
 
@@ -1414,7 +1421,7 @@ class CustomDeckPanel(ttk.Frame):
                     iid=str(idx),
                     text=card.get("name", ""),
                     values=row_values,
-                    tags=(tag,),
+                    tags=card_row_tags(card, tag),
                 )
 
             if hasattr(tree, "reapply_sort"):

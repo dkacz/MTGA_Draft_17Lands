@@ -31,6 +31,9 @@ class Seventeenlands:
     def __init__(self):
         # All Decks rating origin of the last mixed-period download, else None.
         self.rating_sources = None
+        # Games per color key in the last color ratings download, for the
+        # rating prior's shrinking of a pair's win rate.
+        self.color_games = {}
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
         try:
@@ -363,6 +366,7 @@ class Seventeenlands:
 
     def _process_color_ratings(self, data, color_filter, threshold=5000):
         results = {}
+        self.color_games = {}
         game_count = 0
         for entry in data:
             if entry.get("is_summary"):
@@ -395,6 +399,7 @@ class Seventeenlands:
                         wins = entry.get("wins", 0)
                         winrate = (wins / games) * 100 if games > 0 else 0.0
                         results[normalized_key] = round(winrate, 1)
+                        self.color_games[normalized_key] = games
         return results, game_count
 
     # RESTORED LEGACY METHOD

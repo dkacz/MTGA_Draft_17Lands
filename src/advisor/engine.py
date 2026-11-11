@@ -13,7 +13,7 @@ from src.advisor.card_features import (
     get_off_color_requirements, get_own_token_creation_text, is_on_color,
 )
 from src.advisor.card_quality import (
-    blended_win_rate, observed_win_rate, sample_count, stats_for,
+    blended_win_rate, is_predicted, observed_win_rate, sample_count, stats_for,
 )
 from src.advisor.mana_base import ManaSourceAnalyzer, count_fixing
 from src.advisor.schema import Recommendation
@@ -135,7 +135,9 @@ class DraftAdvisor:
                     reasons = ["No published GIHWR"]
                 else:
                     final = max(0.0, base + max(-10.0, min(10.0, role_bonus + scarcity))) * cast_fit
-                    if stats_for(card).get("period"):
+                    if is_predicted(stats_for(card)):
+                        reasons.append("GIH WR predicted from reviewers' grades")
+                    elif stats_for(card).get("period"):
                         reasons.append("GIH WR from all-time data")
                     elif 0 < samples < 500:
                         reasons.append(f"Small GIH sample ({samples})")

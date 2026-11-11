@@ -6,9 +6,11 @@ Debug/
 Downloads/
 Logs/
 Screenshots/
+RatingPriors/
 Sets/
 Temp/
 Tier/
+*_prior.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

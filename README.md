@@ -4,6 +4,13 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.33 predicts a GIH WR for the cards of a new set that 17Lands has not
+rated yet when a prior file for the set, built from the grades that reviewers
+published before the release, is in the app's RatingPriors folder. A predicted
+value carries a leading "~", for example ~57.3, and a published GIH WR from few
+games leans toward the predicted value in the advisor. Amber text in a card
+table, tooltip or label means that the card's GIH WR is predicted.
+
 Version 4.32 includes the upstream releases 4.26 to 4.31. Deck building,
 the deck score and the deck simulator now follow the upstream project, whose
 deck score is fit to about 480,000 17Lands decks. The pick advisor remains this

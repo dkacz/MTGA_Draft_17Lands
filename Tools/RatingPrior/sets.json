@@ -1,0 +1,97 @@
+{
+  "TRK": {
+    "cfb": "Star Trek",
+    "llu": {"d13af031a76e4a868cf2d8aad3386e0a": "Marc", "5d052764d08f49238b8232f591b46507": "Alex"}
+  },
+  "LCI": {
+    "cfb": "Lost Caverns of Ixalan",
+    "llu": {"b8dad7059ff24da28da636a1c50da7e8": "Alex"},
+    "lol": "870a65696eec48fc89c7b1f009e09efb",
+    "karsten": "bf6fc258deeb4f5981219ee34219f055"
+  },
+  "MKM": {
+    "cfb": "MKM",
+    "llu": {"a5c17edddaea4680a28126dae2a5178f": "Alex"},
+    "lol": "399d96a213b44f87bdd2a2c915d6a15a",
+    "karsten": "e4744862da1b4d1f9e63c7a690faf1bd"
+  },
+  "OTJ": {
+    "cfb": "Outlaws of Thunder Junction",
+    "lol": "6af8b740d63e432b93da53aed00bc091",
+    "karsten": "fb67832eb24f47d981fbb83013c9c47f"
+  },
+  "MH3": {
+    "cfb": "Modern Horizons 3",
+    "lol": "59a12f331f7d4bf5949f933110202d61",
+    "karsten": "5422e4e822e140ab8f20f79e4cbd8a28"
+  },
+  "BLB": {
+    "cfb": "Bloomburrow",
+    "lol": "da50517348024cc88105f98ce52c52f3",
+    "karsten": "d9510c1a14734fc7bdb5b92bed413bba"
+  },
+  "DSK": {
+    "cfb": "Duskmourn",
+    "llu": {"856d115e97b443ce955dcc85ece3dcf5": "Alex"},
+    "lol": "292091ac82554707928df16d509479ef",
+    "karsten": "0836fcebc7da40c38f5a5363e6eae7d6"
+  },
+  "FDN": {
+    "cfb": "Foundations",
+    "llu": {"71f4654151a244b281e29d30017f9e63": "Alex"},
+    "lol": "c9d4b680c8d243c7b5827e8559c2c05a",
+    "karsten": "7da16b7c955241b7a80964a2f2aef7d4"
+  },
+  "DFT": {
+    "cfb": "Aetherdrift",
+    "llu": {"4cea645cd96d44bda53eda2c1f080e2a": "Alex", "b0f9dbffd24843d5b8b693f30bc8b1e9": "joint"},
+    "lol": "3324d17f47ac4bd48fcd984703024860"
+  },
+  "TDM": {
+    "cfb": "Tarkir: Dragonstorm",
+    "llu": {"dd9c5b6db6b94ce0bbf3fd285625ceb9": "joint"},
+    "lol": "2b810f2420154df9a11ad118fa7e4ae7"
+  },
+  "FIN": {
+    "cfb": "FINAL FANTASY",
+    "llu": {"35157ab6c45a48a2aabc92853e389af3": "Marc", "90be207ac0e34b8ea20ae396c434cbae": "joint"},
+    "lol": "f191ec8a226f450b882b52013ad68aeb"
+  },
+  "EOE": {
+    "cfb": "Edge of Eternities",
+    "llu": {"13384ec719b74936b0c700126469a22a": "Alex", "4f34ccc070464c6c90f85c78972ee6ac": "joint"},
+    "lol": "3a71ac9551d34a45a5277e191a471bdd"
+  },
+  "TLA": {
+    "cfb": "Avatar: The Last Airbender",
+    "llu": {
+      "10ab962ac03b4774b7cd2cb8bec152af": "Marc",
+      "6554520225504ef9a3d5360c062a8274": "Alex",
+      "efdfa8408fb448be846ac06f9d9192ff": "joint"
+    }
+  },
+  "ECL": {
+    "cfb": "Lorwyn Eclipsed",
+    "llu": {"0fef073a7db5401ba7e260e8649f2bea": "Marc", "1745e64176864bb2bec132cbd601b604": "joint"}
+  },
+  "TMT": {
+    "cfb": "Teenage Mutant Ninja Turtles",
+    "llu": {"fd5499ae88854ca0ac1bc2ad95ade9b2": "joint"}
+  },
+  "SOS": {
+    "cfb": "Secrets of Strixhaven",
+    "llu": {
+      "09ccc33bf4d6461f9c73de01bd8efe0c": "Marc",
+      "3dda4b67b4b0403caeb0a744887b0208": "Alex",
+      "e195401b1eaa48e3b5d6670e0ae338e9": "Alex"
+    }
+  },
+  "MSH": {
+    "cfb": "Marvel Super Heroes",
+    "llu": {"e0c4c50e90914ac390a1f792e0717ed2": "Marc"}
+  },
+  "FRA": {
+    "cfb": "Reality Fracture",
+    "llu": {"e95fd9365a86464cae2451e34c39102a": "Marc", "3ceeafffe39348e6824ea8605b3e6e89": "Alex"}
+  }
+}

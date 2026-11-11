@@ -23,10 +23,12 @@ from src.ui.components import (
     TypePieChart,
     CollapsibleFrame,
     AutoScrollbar,
+    card_row_tags,
 )
 from src.advisor.schema import Recommendation
 from src.ui.advisor_view import AdvisorPanel
 from src.card_logic import format_win_rate
+from src.rating_prior import is_predicted
 from src.ui.dashboard_recap import DraftRecapScreen
 
 
@@ -733,6 +735,7 @@ class DashboardFrame(ttk.Frame):
                             field,
                             metrics,
                             self.configuration.settings.result_format,
+                            predicted=is_predicted(stats, field),
                         )
                     )
 
@@ -741,6 +744,7 @@ class DashboardFrame(ttk.Frame):
                     "card_name": name,
                     "vals": row_values,
                     "tag": row_tag,
+                    "card": card,
                     "sort_key": (
                         rec.contextual_score if rec else stats.get("gihwr", 0.0)
                     ),
@@ -761,7 +765,7 @@ class DashboardFrame(ttk.Frame):
                 "end",
                 text=row.get("card_name", ""),
                 values=row["vals"],
-                tags=(row["tag"],),
+                tags=card_row_tags(row["card"], row["tag"]),
             )
 
         if hasattr(tree, "reapply_sort"):

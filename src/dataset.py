@@ -9,6 +9,7 @@ from src.utils import (
     normalize_color_string,
     sanitize_card_name,
 )
+from src.rating_prior import apply_rating_prior
 from typing import List, Dict, Tuple
 import copy
 import threading
@@ -358,6 +359,10 @@ class Dataset:
                     card[DATA_FIELD_NAME] = card_name
                     name_index[card_name] = card
                     id_index[card_name] = k
+
+        # Predicted GIH WR for cards 17Lands has not rated, when the set has a
+        # prior file. Every load recomputes it from the dataset's current ALSA.
+        apply_rating_prior(json_data)
 
         with self._resolution_lock:
             self._invalidate_resolution()

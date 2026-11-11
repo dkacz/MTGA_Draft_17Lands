@@ -28,6 +28,8 @@ _test_config_path = Path(_test_config_dir.name) / "config.json"
 _test_config_path.write_text("{}", encoding="utf-8")
 with patch.object(constants, "BASE_DIR", _test_config_dir.name):
     import src.configuration
+# Rating prior files in a developer's checkout must not change test datasets.
+constants.RATING_PRIOR_FOLDER = os.path.join(_test_config_dir.name, "RatingPriors")
 
 from src.ui.styles import Theme
 from ttkbootstrap.style import StyleBuilderTTK
