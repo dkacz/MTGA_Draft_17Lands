@@ -1582,6 +1582,7 @@ class FileExtractor(UIProgress):
                         threshold=self.threshold,
                     )
                 )
+                self.combined_data["color_games"] = seventeenlands.color_games
                 self.set_game_count(game_count)
                 result = True
                 break

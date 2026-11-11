@@ -13,6 +13,7 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 from src import constants
 from src.card_logic import field_process_sort
+from src.rating_prior import is_predicted
 from src.ui.styles import Theme
 
 
@@ -354,12 +355,19 @@ class CardToolTip(tkinter.Toplevel):
         def fp(v, i=False):
             return "-" if not v else (f"{v:+.1f}%" if i else f"{v:.1f}%")
 
+        # "~" marks a predicted GIH WR, which has no games of its own.
+        predicted = is_predicted(gs)
+
         def fn(v):
             return "-" if not v else (f"{v:.2f}" if isinstance(v, float) else f"{v:,}")
 
         mt = [
             [
-                ("GIH WR:", fp(wr), Theme.SUCCESS if wr >= 55.0 else Theme.TEXT_MAIN),
+                (
+                    "GIH WR:",
+                    ("~" if predicted else "") + fp(wr),
+                    Theme.SUCCESS if wr >= 55.0 else Theme.TEXT_MAIN,
+                ),
                 (
                     "IWD:",
                     fp(iwd, True),
@@ -370,7 +378,7 @@ class CardToolTip(tkinter.Toplevel):
                 ("ALSA:", fn(gs.get("alsa", 0.0)), Theme.TEXT_MAIN),
                 ("ATA:", fn(gs.get("ata", 0.0)), Theme.TEXT_MAIN),
             ],
-            [("Games:", f"{fn(smp)}", Theme.TEXT_MAIN), ("", "", "")],
+            [("Games:", "-" if predicted else fn(smp), Theme.TEXT_MAIN), ("", "", "")],
         ]
         for ri, row in enumerate(mt):
             for ci, (lbl, val, col) in enumerate(row):
@@ -392,11 +400,14 @@ class CardToolTip(tkinter.Toplevel):
                     sticky="w",
                     padx=Theme.scaled_val((0, 20)),
                 )
+        # Play share comes from games, so predicted pair rates are left out.
         va = sorted(
             [
                 k
                 for k in stats.keys()
-                if k != "All Decks" and stats[k].get("gihwr", 0) > 0
+                if k != "All Decks"
+                and stats[k].get("gihwr", 0) > 0
+                and not is_predicted(stats[k])
             ],
             key=lambda k: stats[k].get("samples", 0),
             reverse=True,

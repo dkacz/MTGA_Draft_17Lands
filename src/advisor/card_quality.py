@@ -1,7 +1,9 @@
 """Observed win-rate estimates shared by pack and deck scoring.
 
-The output stays in percentage points. Missing published win rates remain zero;
-no tier list or invented rating is injected into the draft advisor.
+The output stays in percentage points. Missing published win rates remain zero
+unless the set has a rating prior: then src/rating_prior.py fills them with a
+predicted GIH WR marked by the PREDICTED period, which counts as
+FALLBACK_SAMPLE_CAP games. No tier list is injected into the draft advisor.
 """
 
 import math
@@ -38,7 +40,8 @@ def sample_count(stats):
 # Games in hand at which 17Lands first publishes a GIH WR. A win rate filled
 # from another period (stats["period"] set by the mixed time period) counts as
 # at most this many games: its own count measures the old card pool, not how
-# well the rate carries over to a changed one. Current ratings are unchanged.
+# well the rate carries over to a changed one. A predicted GIH WR (period
+# PREDICTED) counts as exactly this many. Current ratings are unchanged.
 FALLBACK_SAMPLE_CAP = 500
 
 
@@ -64,8 +67,11 @@ def blended_win_rate(card, archetype="All Decks", archetype_weight=0.0, mean=54.
         return arch_wr
 
     confidence = sample_weight(global_stats)
+    # A small sample leans toward the card's predicted GIH WR when the set has
+    # a rating prior (src/rating_prior.py), else toward the set mean.
+    anchor = float(global_stats.get("predicted_gihwr") or mean)
     global_estimate = (
-        mean + confidence * (global_wr - mean)
+        anchor + confidence * (global_wr - anchor)
         if sample_count(global_stats) > 0
         else global_wr
     )

@@ -19,6 +19,7 @@ from src.ui.components import (
 from src.ui.advisor_view import AdvisorPanel
 from src.configuration import write_configuration
 from src.card_logic import format_win_rate
+from src.rating_prior import is_predicted
 
 
 class CompactOverlay(tb.Toplevel):
@@ -526,6 +527,7 @@ class CompactOverlay(tb.Toplevel):
                                 field,
                                 metrics,
                                 self.configuration.settings.result_format,
+                                predicted=is_predicted(stats, field),
                             )
                         )
 

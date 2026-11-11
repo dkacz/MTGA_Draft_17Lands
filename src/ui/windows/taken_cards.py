@@ -19,6 +19,7 @@ from src.ui.components import (
     ColorFilterSelector,
 )
 from src.card_logic import format_win_rate
+from src.rating_prior import is_predicted
 
 
 class TakenCardsPanel(ttk.Frame):
@@ -277,18 +278,15 @@ class TakenCardsPanel(ttk.Frame):
                         row_values.append("NA")
 
                 else:
-                    val = (
-                        card.get("deck_colors", {})
-                        .get(self.active_color, {})
-                        .get(field, 0.0)
-                    )
+                    stats = card.get("deck_colors", {}).get(self.active_color, {})
                     row_values.append(
                         format_win_rate(
-                            val,
+                            stats.get(field, 0.0),
                             self.active_color,
                             field,
                             metrics,
                             self.configuration.settings.result_format,
+                            predicted=is_predicted(stats, field),
                         )
                     )
 

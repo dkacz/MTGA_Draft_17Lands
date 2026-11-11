@@ -27,6 +27,7 @@ from src.ui.components import (
 from src.advisor.schema import Recommendation
 from src.ui.advisor_view import AdvisorPanel
 from src.card_logic import format_win_rate
+from src.rating_prior import is_predicted
 from src.ui.dashboard_recap import DraftRecapScreen
 
 
@@ -733,6 +734,7 @@ class DashboardFrame(ttk.Frame):
                             field,
                             metrics,
                             self.configuration.settings.result_format,
+                            predicted=is_predicted(stats, field),
                         )
                     )
 

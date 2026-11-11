@@ -9,6 +9,7 @@ from src import constants
 from src.ui.styles import Theme
 from src.ui.components import DynamicTreeviewManager, AutocompleteEntry, CardToolTip
 from src.card_logic import format_win_rate, row_color_tag
+from src.rating_prior import is_predicted
 
 
 class ComparePanel(ttk.Frame):
@@ -144,18 +145,15 @@ class ComparePanel(ttk.Frame):
                     else:
                         row_values.append("NA")
                 else:
-                    val = (
-                        card.get("deck_colors", {})
-                        .get(active_color, {})
-                        .get(field, 0.0)
-                    )
+                    stats = card.get("deck_colors", {}).get(active_color, {})
                     row_values.append(
                         format_win_rate(
-                            val,
+                            stats.get(field, 0.0),
                             active_color,
                             field,
                             metrics,
                             self.configuration.settings.result_format,
+                            predicted=is_predicted(stats, field),
                         )
                     )
 

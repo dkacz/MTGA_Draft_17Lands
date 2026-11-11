@@ -29,6 +29,7 @@ from src.ui.components import (
     AutoScrollbar,
 )
 from src.card_logic import copy_deck, get_deck_metrics
+from src.rating_prior import is_predicted
 from src.sealed_logic import SealedSession, generate_sealed_shells
 from src.utils import open_file
 
@@ -910,6 +911,7 @@ class SealedStudioWindow(tb.Toplevel):
                             field,
                             self.metrics,
                             self.configuration.settings.result_format,
+                            predicted=is_predicted(stats, field),
                         )
                     )
 
@@ -1090,11 +1092,9 @@ class SealedStudioWindow(tb.Toplevel):
                         placeholder_text_id,
                     )
 
-                    gihwr = (
-                        card.get("deck_colors", {})
-                        .get("All Decks", {})
-                        .get("gihwr", 0.0)
-                    )
+                    overall = card.get("deck_colors", {}).get("All Decks", {})
+                    gihwr = overall.get("gihwr", 0.0)
+                    mark = "~" if is_predicted(overall) else ""
                     if gihwr > 0:
                         bg_col = (
                             Theme.SUCCESS
@@ -1102,7 +1102,7 @@ class SealedStudioWindow(tb.Toplevel):
                             else (Theme.WARNING if gihwr >= 54.0 else Theme.ERROR)
                         )
                         # Much smaller, cleaner badge in the top left so it doesn't cover mana costs
-                        rect_w = Theme.scaled_val(28)
+                        rect_w = Theme.scaled_val(34 if mark else 28)
                         rect_h = Theme.scaled_val(14)
                         rx = current_x + 2
                         ry = current_y + 2
@@ -1119,7 +1119,7 @@ class SealedStudioWindow(tb.Toplevel):
                         canvas.create_text(
                             rx + (rect_w / 2),
                             ry + (rect_h / 2),
-                            text=f"{gihwr:.1f}",
+                            text=f"{mark}{gihwr:.1f}",
                             fill="#ffffff",
                             font=Theme.scaled_font(7, "bold"),
                             tags=overlay_group,

@@ -1337,6 +1337,7 @@ class CustomDeckPanel(ttk.Frame):
             active_filter = "All Decks"
 
         from src.card_logic import format_win_rate, row_color_tag
+        from src.rating_prior import is_predicted
 
         def populate_tree(manager, source_list, is_sb):
             tree = manager.tree
@@ -1401,6 +1402,7 @@ class CustomDeckPanel(ttk.Frame):
                                 field,
                                 metrics,
                                 self.configuration.settings.result_format,
+                                predicted=is_predicted(stats, field),
                             )
                         )
 

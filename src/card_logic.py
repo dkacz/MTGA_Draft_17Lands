@@ -185,7 +185,9 @@ def field_process_sort(field_value):
     """Helper for treeview sorting."""
     try:
         if isinstance(field_value, str):
-            val = field_value.replace("*", "").replace("%", "").strip()
+            val = (
+                field_value.replace("*", "").replace("%", "").replace("~", "").strip()
+            )
             if val in ["NA", "-", ""]:
                 return (0, 0.0)
 
@@ -294,11 +296,17 @@ def export_draft_to_json(history, dataset, picked_cards_map):
     return json.dumps(output, indent=4)
 
 
-def format_win_rate(val, color, field, metrics, result_format):
-    from src import constants
-
+def format_win_rate(val, color, field, metrics, result_format, predicted=False):
+    """The cell text of a win rate. predicted marks a GIH WR that
+    src/rating_prior.py predicted, with a leading "~"."""
     if val == 0.0 or val == "-":
         return "-"
+    text = _format_win_rate_value(val, color, field, metrics, result_format)
+    return f"~{text}" if predicted else text
+
+
+def _format_win_rate_value(val, color, field, metrics, result_format):
+    from src import constants
 
     if (
         not metrics
