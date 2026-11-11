@@ -301,10 +301,12 @@ def count_drafts(draft_path, card_index, release):
     with gzip.open(draft_path, "rt", newline="") as f:
         header = read_header(f)
         n_head = head_width(header)
-        i_draft, i_time, i_pack, i_pick, i_choice, i_choice2 = (
+        i_draft, i_time, i_pack, i_pick, i_choice = (
             header.index(c)
-            for c in ("draft_id", "draft_time", "pack_number", "pick_number", "pick", "pick_2")
+            for c in ("draft_id", "draft_time", "pack_number", "pick_number", "pick")
         )
+        # Sets before TLA have no pick_2 column; it only feeds an anomaly count.
+        i_choice2 = header.index("pick_2") if "pick_2" in header else None
         pack_cards, pack_card_index = card_columns(header, "pack_card_", card_index)
         for line in f:
             head, tail = split_row(line, n_head, len(header))
@@ -317,7 +319,7 @@ def count_drafts(draft_path, card_index, release):
                 done.add(current)
                 p = period(head[i_time])
                 first_time = min(first_time or head[i_time], head[i_time])
-            if head[i_choice2]:
+            if i_choice2 is not None and head[i_choice2]:
                 acc["anomalies"]["second pick in one pick"] += 1
             values = pack_cards(tail)
             contents = {
