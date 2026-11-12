@@ -57,6 +57,7 @@ class Seventeenlands:
             "ever_drawn_win_rate", "opening_hand_win_rate", "win_rate",
             "never_drawn_win_rate", "drawn_win_rate", "avg_seen", "avg_pick",
             "drawn_improvement_win_rate", "ever_drawn_game_count", "drawn_game_count",
+            "seen_count", "pick_count",
         )
         for card in payload:
             if not isinstance(card.get("name"), str) or not card["name"].strip():
@@ -71,7 +72,7 @@ class Seventeenlands:
                 try:
                     number = float(value)
                     valid = not isinstance(value, bool) and math.isfinite(number)
-                    if field.endswith("game_count"):
+                    if field.endswith("_count"):
                         valid = valid and number >= 0 and number.is_integer()
                         int(value)  # Must also support the consumer's integer conversion.
                 except (ValueError, TypeError, OverflowError):
@@ -290,6 +291,10 @@ class Seventeenlands:
                     float(card.get("drawn_improvement_win_rate") or 0) * 100, 2
                 ),
                 "samples": int(card.get("ever_drawn_game_count") or 0),
+                # Copies seen and picked, under the names of the synced
+                # datasets, from which the rating prior counts copies per draft.
+                "seen_count": int(card.get("seen_count") or 0),
+                "pick_count": int(card.get("pick_count") or 0),
             }
 
     def _extract_images(self, card_data: Dict) -> List[str]:

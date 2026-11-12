@@ -3,23 +3,33 @@
 Tools/RatingPrior/build_prior.py writes <SET>_prior.json from the grades that
 reviewers published before the Arena release. The file lives in
 RATING_PRIOR_FOLDER, which dataset sync never touches, and holds each rated
-card's reviewers' score together with the constants that turn it into a GIH WR.
+card's reviewers' score and per-source scores together with the constants of a
+linear model and, optionally, gradient-boosted model trees fitted on past sets.
 
-When a dataset of that set is loaded, apply_rating_prior predicts the GIH WR of
-each rated card from the reviewers' score, the card's pick order (ALSA and ATA)
-when the dataset has it and the strength of the card's colors when the dataset
-has the color pairs' game counts. A card without a 17Lands GIH WR gets the
-prediction, and a card with one keeps it and gains the prediction in
-"predicted_gihwr", toward which the advisor shrinks a small sample. A card's
-missing GIH WR in a color pair is then filled from its overall GIH WR and the
-pair's shift. Every filled value has the PREDICTED period, which the interface
-marks and the advisor uses without shrinking it again. Without a prior file
-for the set the dataset is left unchanged.
+When a dataset of that set is loaded, apply_rating_prior computes each rated
+card's inputs once: the reviewers' scores, the card's pick order (ALSA and ATA)
+when the dataset has it, the strength of the card's colors when the dataset
+has the color pairs' game counts and the copies of the card seen and picked
+per draft when the dataset has 17Lands' counts of them. Both models read these
+inputs. The model trees, fitted at a few snapshots after the release, predict
+from day 1 on: the predictions of the two snapshot models around the dataset's
+game count are interpolated linearly, the release-day model being the linear
+model. The linear model predicts alone on release day, for a prior without
+trees and for a dataset without the counts of copies seen and picked.
+
+A card without a 17Lands GIH WR gets the prediction, and a card with one keeps
+it and gains the prediction in "predicted_gihwr", toward which the advisor
+shrinks a small sample. A card's missing GIH WR in a color pair is then filled
+from its overall GIH WR shifted by the strength of the pair less the strength
+of the card's own colors. Every filled value has the PREDICTED period, which
+the interface marks and the advisor uses without shrinking it again. Without a
+prior file for the set the dataset is left unchanged.
 """
 
 import json
 import logging
 import os
+from array import array
 from collections import Counter, defaultdict
 from statistics import NormalDist
 
@@ -32,11 +42,18 @@ logger = logging.getLogger(__name__)
 PRIOR_FORMAT = 1
 PRIOR_FILE_SUFFIX = "_prior.json"
 
-# A pair's shift for a group of cards (both colors, one color, colorless or
-# outside the pair) is the games-weighted mean over at least this many cards
-# with both rates. A smaller group would make the shift mostly noise, so its
-# cards take the shift from the strength of the pair and of their own colors.
-MIN_SHIFT_CARDS = 10
+# An Arena draft has three packs of 14 cards, so a drafter makes 42 picks.
+# 17Lands gives no number of drafts, so the drafts in a dataset are its picks
+# of all cards divided by this number.
+PICKS_PER_DRAFT = 42
+
+# The card inputs that model trees may name, besides the per-source reviewer
+# scores "authors_<source>".
+TREE_INPUTS = (
+    "authors", "authors_sources", "pick_order", "pick_order_alsa",
+    "pick_order_ata", "alsa", "ata", "seen_per_draft", "picked_per_draft",
+    "color_strength", "colors",
+)
 
 
 def normal_scores(values):
@@ -72,6 +89,102 @@ def value_at(spec, games):
     return points[-1][1]
 
 
+_FLOAT32 = array("f", [0.0])
+
+
+def _f32(value):
+    """The value rounded to a 32-bit float, the precision of XGBoost."""
+    _FLOAT32[0] = value
+    return _FLOAT32[0]
+
+
+def _booster(model, n_inputs):
+    """(base score, trees) of an XGBoost regression model saved as JSON.
+
+    Each tree is a list of nodes (input index, threshold, left child, right
+    child, child for a missing input). A leaf has left child -1 and its value
+    in place of the threshold. Thresholds are 32-bit floats as in XGBoost.
+    """
+    learner = model["learner"]
+    if learner["objective"]["name"] != "reg:squarederror":
+        raise ValueError("unsupported tree objective")
+    booster = learner["gradient_booster"]
+    if booster["name"] != "gbtree":
+        raise ValueError("unsupported tree booster")
+    params = learner["learner_model_param"]
+    if int(params["num_feature"]) != n_inputs or int(params.get("num_target", 1)) != 1:
+        raise ValueError("model trees do not match their inputs")
+    base = _f32(float(str(params["base_score"]).strip("[]")))
+    trees = []
+    for tree in booster["model"]["trees"]:
+        if any(tree["split_type"]):
+            raise ValueError("unsupported categorical split")
+        nodes = list(
+            zip(
+                tree["split_indices"],
+                map(_f32, tree["split_conditions"]),
+                tree["left_children"],
+                tree["right_children"],
+                (
+                    left if default_left else right
+                    for left, right, default_left in zip(
+                        tree["left_children"],
+                        tree["right_children"],
+                        tree["default_left"],
+                    )
+                ),
+            )
+        )
+        if any(left >= len(nodes) or right >= len(nodes) for _, _, left, right, _ in nodes):
+            raise ValueError("broken model tree")
+        trees.append(nodes)
+    return base, trees
+
+
+def _tree_output(booster, values):
+    """XGBoost's prediction of a model for one card: values in the model's
+    input order, None for a missing input, compared as 32-bit floats."""
+    base, trees = booster
+    row = [None if value is None else _f32(value) for value in values]
+    total = base
+    for nodes in trees:
+        i = 0
+        while True:
+            index, threshold, left, right, missing = nodes[i]
+            if left < 0:
+                total = _f32(total + threshold)
+                break
+            value = row[index]
+            if value is None:
+                i = missing
+            else:
+                i = left if value < threshold else right
+    return total
+
+
+def _snapshot_models(prior):
+    """[(games, level, inputs, booster)] of the prior's model trees, sorted by
+    the game count of their snapshot. A tree model predicts a card's GIH WR
+    deviation from the level, the typical GIH WR at its snapshot."""
+    models = []
+    for tree in prior.get("trees") or []:
+        inputs = list(tree["inputs"])
+        unknown = [
+            name for name in inputs
+            if name not in TREE_INPUTS and not name.startswith("authors_")
+        ]
+        if unknown:
+            raise ValueError(f"unknown tree inputs {unknown}")
+        games = float(tree["games"])
+        if games <= 0:
+            raise ValueError("a tree model needs a snapshot after the release")
+        models.append((games, float(tree["level"]), inputs, _booster(tree["model"], len(inputs))))
+    models.sort(key=lambda model: model[0])
+    if len({model[0] for model in models}) != len(models):
+        raise ValueError("two tree models at one game count")
+    return models
+
+
 def load_prior(set_code, folder=None):
     """The prior file for the set as a dict, or None when there is none."""
     if not set_code:
@@ -91,8 +204,13 @@ def load_prior(set_code, folder=None):
         for key in ("mean", "sd", "scale", "pick_order_weight", "color_weight"):
             value_at(prior[key], 0)
         float(prior["pair_games_prior"]), float(prior["pair_persistence"])
+        has_trees = bool(_snapshot_models(prior))
         for rated in prior["cards"].values():
             float(rated["authors"]), float(rated.get("weight", 1.0))
+            if has_trees and not isinstance(rated.get("sources"), dict):
+                raise ValueError("model trees need each card's per-source scores")
+            for score in (rated.get("sources") or {}).values():
+                float(score)
         return prior
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         logger.warning("Ignoring rating prior %s: %s", path, error)
@@ -100,21 +218,37 @@ def load_prior(set_code, folder=None):
 
 
 def _pick_order_scores(cards):
-    """{name: score} from ALSA and ATA, earlier picks higher, each a normal
-    score among the set's cards with that value, averaged when both exist."""
-    per_field = []
+    """{field: {name: score}} for ALSA and ATA, earlier picks higher, each a
+    normal score among the set's cards with that value."""
+    scores = {}
     for field in (constants.DATA_FIELD_ALSA, constants.DATA_FIELD_ATA):
         values = {}
         for name, card in cards.items():
             value = card[constants.DATA_FIELD_DECK_COLORS]["All Decks"].get(field)
             if isinstance(value, (int, float)) and value > 0.0:
                 values[name] = -float(value)
-        per_field.append(normal_scores(values))
-    names = set().union(*per_field)
+        scores[field] = normal_scores(values)
+    return scores
+
+
+def _per_draft_counts(cards):
+    """{name: (copies seen per draft, copies picked per draft)} from 17Lands'
+    counts of copies seen ("seen_count") and picked ("pick_count"), each
+    divided by the dataset's drafts, its picks of all cards / PICKS_PER_DRAFT.
+    Empty when the dataset has no such counts."""
+    counts = {}
+    for name, card in cards.items():
+        stats = card[constants.DATA_FIELD_DECK_COLORS]["All Decks"]
+        seen, picked = stats.get("seen_count"), stats.get("pick_count")
+        if isinstance(seen, (int, float)) and isinstance(picked, (int, float)):
+            counts[name] = (float(seen), float(picked))
+    total = sum(picked for _, picked in counts.values())
+    if total <= 0:
+        return {}
+    per_pick = PICKS_PER_DRAFT / total
     return {
-        name: sum(s[name] for s in per_field if name in s)
-        / sum(1 for s in per_field if name in s)
-        for name in names
+        name: (seen * per_pick, picked * per_pick)
+        for name, (seen, picked) in counts.items()
     }
 
 
@@ -159,47 +293,101 @@ def _card_colors(card):
     return normalize_color_string("".join(card.get(constants.DATA_FIELD_COLORS) or []))
 
 
-def _pair_group(colors, pair):
-    """Where a card of these colors sits relative to a color pair."""
-    if not colors:
-        return "colorless"
-    if set(colors) - set(pair):
-        return "outside"
-    return "both" if set(colors) == set(pair) else "one"
+def _positive(value):
+    return float(value) if isinstance(value, (int, float)) and value > 0 else None
 
 
-def _pair_shifts(cards):
-    """{pair: {group: shift}} for every color pair with rows in the dataset.
-
-    A group's shift is the games-weighted mean of the pair's GIH WR minus the
-    overall GIH WR over its cards with both rates, given only for a group with
-    at least MIN_SHIFT_CARDS such cards.
-    """
-    sums = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0]))
-    for card in cards.values():
-        deck_colors = card[constants.DATA_FIELD_DECK_COLORS]
-        overall = observed_win_rate(deck_colors["All Decks"])
+def card_inputs(data, prior, cards):
+    """({name: {input: value}}, whether the dataset counts copies seen and
+    picked) for every card that the prior rates and `cards` ({name: card} of
+    the dataset) holds. A missing input is None. Both models read these
+    inputs, and the training of the model constants computes them with this
+    function from a dataset built as the app would hold it."""
+    pick_order = _pick_order_scores(cards)
+    strength = _color_strength(data, prior)
+    per_draft = _per_draft_counts(cards)
+    inputs = {}
+    for name, rated in prior["cards"].items():
+        card = cards.get(name)
+        if card is None:
+            continue
+        stats = card[constants.DATA_FIELD_DECK_COLORS]["All Decks"]
+        alsa = pick_order[constants.DATA_FIELD_ALSA].get(name)
+        ata = pick_order[constants.DATA_FIELD_ATA].get(name)
+        scores = [score for score in (alsa, ata) if score is not None]
         colors = _card_colors(card)
-        for pair, stats in deck_colors.items():
-            if len(pair) != 2 or not isinstance(stats, dict):
-                continue
-            rate, games = observed_win_rate(stats), sample_count(stats)
-            if not (rate or games):
-                continue
-            groups = sums[pair]
-            if overall and rate and games:
-                total = groups[_pair_group(colors, pair)]
-                total[0] += (rate - overall) * games
-                total[1] += games
-                total[2] += 1
-    return {
-        pair: {
-            group: total[0] / total[1]
-            for group, total in groups.items()
-            if total[2] >= MIN_SHIFT_CARDS
+        # A card that 17Lands lists without counts was neither seen nor picked.
+        seen, picked = per_draft.get(name, (0.0, 0.0)) if per_draft else (None, None)
+        inputs[name] = {
+            "authors": float(rated["authors"]),
+            "authors_sources": float(rated.get("weight", 1.0)),
+            **{
+                f"authors_{source}": float(score)
+                for source, score in (rated.get("sources") or {}).items()
+            },
+            "pick_order": sum(scores) / len(scores) if scores else None,
+            "pick_order_alsa": alsa,
+            "pick_order_ata": ata,
+            "alsa": _positive(stats.get(constants.DATA_FIELD_ALSA)),
+            "ata": _positive(stats.get(constants.DATA_FIELD_ATA)),
+            "seen_per_draft": seen,
+            "picked_per_draft": picked,
+            "color_strength": strength.get(colors, 0.0),
+            "colors": float(len(colors)),
         }
-        for pair, groups in sums.items()
-    }
+    return inputs, bool(per_draft)
+
+
+def linear_prediction(card, prior, games):
+    """GIH WR of the linear model: mean + sd * scale * score + color_weight *
+    color strength, the score being the reviewers' score averaged, when the
+    card has a pick order, with the pick order score at pick_order_weight."""
+    score = card["authors"]
+    pick_weight = value_at(prior["pick_order_weight"], games)
+    if card["pick_order"] is not None:
+        weight = card["authors_sources"]
+        score = (weight * score + pick_weight * card["pick_order"]) / (weight + pick_weight)
+    return (
+        value_at(prior["mean"], games)
+        + value_at(prior["sd"], games) * value_at(prior["scale"], games) * score
+        + value_at(prior["color_weight"], games) * card["color_strength"]
+    )
+
+
+def prediction(card, prior, games, models):
+    """GIH WR of a card from its inputs. models: _snapshot_models of the
+    prior, or [] for the linear model alone. From the release on, the release
+    day's linear model and the tree models form a sequence of snapshot models
+    by game count, and the predictions of the two around `games` are
+    interpolated linearly, the last one held beyond its snapshot."""
+    if not models or games <= 0:
+        return linear_prediction(card, prior, games)
+    points = [(0.0, None)] + [(model[0], model) for model in models]
+
+    def predict(model):
+        if model is None:
+            return linear_prediction(card, prior, 0.0)
+        _, level, names, booster = model
+        return level + _tree_output(booster, [card.get(name) for name in names])
+
+    for (g0, m0), (g1, m1) in zip(points, points[1:]):
+        if games <= g1:
+            share = (games - g0) / (g1 - g0)
+            return (1.0 - share) * predict(m0) + share * predict(m1)
+    return predict(points[-1][1])
+
+
+def _dataset_pairs(cards):
+    """The color pairs that some card of the dataset has a row for, with a
+    GIH WR or games."""
+    pairs = set()
+    for card in cards.values():
+        for pair, stats in card[constants.DATA_FIELD_DECK_COLORS].items():
+            if len(pair) == 2 and isinstance(stats, dict) and (
+                observed_win_rate(stats) or sample_count(stats)
+            ):
+                pairs.add(pair)
+    return sorted(pairs)
 
 
 def _set_code(data):
@@ -221,7 +409,8 @@ def apply_rating_prior(data, folder=None):
     """Fill the dataset's missing GIH WRs in place from the set's prior file.
 
     Returns {"predicted": cards given an overall GIH WR, "pairs": color-pair
-    values filled}, or None when the set has no usable prior file.
+    values filled, "model": "trees" or "linear"}, or None when the set has no
+    usable prior file.
     """
     prior = load_prior(_set_code(data), folder)
     if not prior:
@@ -236,36 +425,25 @@ def apply_rating_prior(data, folder=None):
     first = {name: entries[0] for name, entries in by_name.items()}
 
     games = float((data.get("meta") or {}).get("game_count") or 0)
-    pick_order = _pick_order_scores(first)
-    strength = _color_strength(data, prior)
-    shifts = _pair_shifts(first)
-    mean, sd = value_at(prior["mean"], games), value_at(prior["sd"], games)
-    scale = value_at(prior["scale"], games)
-    pick_weight = value_at(prior["pick_order_weight"], games)
-    color_weight = value_at(prior["color_weight"], games)
+    inputs, has_counts = card_inputs(data, prior, first)
+    models = _snapshot_models(prior) if has_counts and games > 0 else []
 
-    counts = {"predicted": 0, "pairs": 0}
-    for name, entries in by_name.items():
-        rated = prior["cards"].get(name)
-        if not rated:
-            continue
-        score, weight = float(rated["authors"]), float(rated.get("weight", 1.0))
-        if name in pick_order:
-            score = (weight * score + pick_weight * pick_order[name]) / (
-                weight + pick_weight
-            )
-        predicted = mean + sd * scale * score
-        predicted += color_weight * strength.get(_card_colors(entries[0]), 0.0)
-        for card in entries:
+    counts = {"predicted": 0, "pairs": 0, "model": "trees" if models else "linear"}
+    for name, card_input in inputs.items():
+        predicted = prediction(card_input, prior, games, models)
+        for card in by_name[name]:
             stats = card[constants.DATA_FIELD_DECK_COLORS]["All Decks"]
             if observed_win_rate(stats):
                 stats["predicted_gihwr"] = round(predicted, 2)
             else:
                 _fill(stats, predicted)
         counts["predicted"] += is_predicted(
-            entries[0][constants.DATA_FIELD_DECK_COLORS]["All Decks"]
+            first[name][constants.DATA_FIELD_DECK_COLORS]["All Decks"]
         )
 
+    strength = _color_strength(data, prior)
+    color_weight = value_at(prior["color_weight"], games)
+    pairs = _dataset_pairs(first)
     for entries in by_name.values():
         colors = _card_colors(entries[0])
         for card in entries:
@@ -273,26 +451,23 @@ def apply_rating_prior(data, folder=None):
             overall = observed_win_rate(deck_colors["All Decks"])
             if not overall:
                 continue
-            for pair, group_shifts in shifts.items():
+            for pair in pairs:
                 # A row missing from the dataset gets no pick order, as in
                 # the fallback period of Seventeenlands._download_with_fallback.
                 stats = deck_colors.setdefault(pair, {"alsa": 0.0, "ata": 0.0})
                 if observed_win_rate(stats):
                     continue
-                shift = group_shifts.get(_pair_group(colors, pair))
-                if shift is None:
-                    # The pair's strength less the strength already in the
-                    # card's overall rate, 0 without the pairs' game counts.
-                    shift = color_weight * (
-                        strength[pair] - strength.get(colors, 0.0)
-                        if pair in strength
-                        else 0.0
-                    )
+                # The pair's strength less the strength already in the card's
+                # overall rate, 0 without the pairs' game counts.
+                shift = color_weight * (
+                    strength[pair] - strength.get(colors, 0.0) if pair in strength else 0.0
+                )
                 _fill(stats, overall + shift)
                 counts["pairs"] += card is entries[0]
     logger.info(
-        "Rating prior %s: predicted GIH WR for %d cards and %d color-pair values",
+        "Rating prior %s (%s model): predicted GIH WR for %d cards and %d color-pair values",
         prior.get("set"),
+        counts["model"],
         counts["predicted"],
         counts["pairs"],
     )
