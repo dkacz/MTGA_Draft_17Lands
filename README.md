@@ -4,6 +4,9 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.35 predicts a GIH WR in a color pair only for cards whose colors lie
+within the pair and for colorless cards.
+
 Version 4.34 improves that prediction from the first day after the release.
 It also uses how many copies of each card 17Lands drafters see and take per
 draft, and it reads the grades of the Limited Level-Ups tier lists and the
