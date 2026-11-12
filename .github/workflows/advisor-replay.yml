@@ -4,15 +4,12 @@ name: Advisor replay
 # change, and reports how often each agrees with drafters and how that relates
 # to their wins. See Tools/AdvisorReplay/README.md.
 #
-# Runs on pull requests that change the advisor or this harness, and by hand
-# (Actions > Advisor replay > Run workflow) to compare a branch with any ref.
+# Runs only by hand (Actions > Advisor replay > Run workflow) to compare a
+# branch with any ref. GitHub stopped the workflows of this fork once because
+# of the scale of its Actions usage, so a replay is no longer started by every
+# pull request that changes the advisor.
 
 on:
-  pull_request:
-    paths:
-      - "src/advisor/**"
-      - "Tools/AdvisorReplay/**"
-      - ".github/workflows/advisor-replay.yml"
   workflow_dispatch:
     inputs:
       base:

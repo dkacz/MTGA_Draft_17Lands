@@ -17,10 +17,13 @@ permissions:
 
 jobs:
   tests:
-    name: Full release tests
+    name: Release tests
     uses: ./.github/workflows/ci.yml
     with:
-      full_matrix: true
+      # One Python on Linux. The full matrix of platforms and versions ran on
+      # every merge and added to the Actions usage for which GitHub stopped
+      # the workflows of this fork.
+      full_matrix: false
 
   build-macos:
     runs-on: macos-15
