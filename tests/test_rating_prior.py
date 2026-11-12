@@ -143,12 +143,13 @@ def test_pair_values_without_the_pairs_game_counts_take_the_overall_rate(tmp_pat
     assert wu["WU0"] == {"gihwr": 57.0, "samples": 500}
     # The cards with both rates in a pair do not shift the others.
     assert wu["Gold"]["gihwr"] == 60.0
-    assert wu["Red"]["gihwr"] == 50.0
     assert wu["Unrated"]["gihwr"] == 55.0
-    # UB has rows only for Red, so every card gets its overall rate there.
-    assert ub["Gold"]["gihwr"] == 60.0 and ub["WU0"]["gihwr"] == 55.0
-    assert all(is_predicted(v[n]) for v in (wu, ub) for n in ("Gold", "Red", "Unrated"))
-    assert counts["pairs"] == 3 + 16
+    assert all(is_predicted(wu[n]) for n in ("Gold", "Unrated"))
+    # A card with a color outside the pair gets no value in it.
+    assert wu["Red"] == {"gihwr": 0.0, "samples": 20}
+    assert ub["Red"] == {"gihwr": 0.0, "samples": 30}
+    assert ub["Gold"] is None and ub["WU0"] is None and ub["Unrated"] is None
+    assert counts["pairs"] == 2
 
 
 def test_pair_values_take_the_shift_from_the_pair_strength(tmp_path):
@@ -162,10 +163,8 @@ def test_pair_values_take_the_shift_from_the_pair_strength(tmp_path):
     # Pair strength: WU +0.5, UB -0.5, W (from WU and WB) +1/6, R none. A card
     # keeps the strength of its own colors that its overall rate already has.
     assert wu["Gold"]["gihwr"] == 60.0
-    assert wu["Red"]["gihwr"] == pytest.approx(50.5)
     assert wu["Unrated"]["gihwr"] == pytest.approx(55.0 + 1 / 6 + 0.5 - 1 / 6, abs=0.01)
-    assert ub["Gold"]["gihwr"] == pytest.approx(60.0 - 0.5 - 0.5)
-    assert ub["W0"]["gihwr"] == pytest.approx(55.0 - 0.5 - 1 / 6, abs=0.01)
+    assert not is_predicted(wu["Red"]) and ub["Gold"] is None and ub["W0"] is None
 
 
 def tree_model(trees, base=0.0, inputs=1):

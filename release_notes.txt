@@ -1,3 +1,6 @@
+===================== RELEASE NOTES 4.35 (FRA fork) =====================
+* dkacz: A predicted GIH WR in a color pair is now given only to cards whose colors all lie within the pair and to colorless cards. A card with a color outside the pair keeps no value in that pair's view, as on 17Lands, so it no longer appears there as a strong pick.
+
 ===================== RELEASE NOTES 4.34 (FRA fork) =====================
 * dkacz: With a prior file built for this version, the predicted GIH WR of cards that 17Lands has not rated yet also uses, from the first day after the release, how many copies of each card 17Lands drafters see and take per draft, which on past sets predicted the final GIH WR better. The prediction reads the grades of the Limited Level-Ups tier lists and the Draftsim set review. A card without a win rate in a color pair gets its overall GIH WR adjusted by the strength of that pair alone. Datasets downloaded by the app now keep the counts of copies seen and picked, which synced datasets already carry.
 

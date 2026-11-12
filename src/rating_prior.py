@@ -19,9 +19,11 @@ trees and for a dataset without the counts of copies seen and picked.
 
 A card without a 17Lands GIH WR gets the prediction, and a card with one keeps
 it and gains the prediction in "predicted_gihwr", toward which the advisor
-shrinks a small sample. A card's missing GIH WR in a color pair is then filled
-from its overall GIH WR shifted by the strength of the pair less the strength
-of the card's own colors. Every filled value has the PREDICTED period, which
+shrinks a small sample. A card whose colors all lie within a color pair, and a
+colorless card, then gets its missing GIH WR in that pair from its overall GIH
+WR shifted by the strength of the pair less the strength of the card's own
+colors. A card with a color outside the pair gets no value there, as on
+17Lands, which rarely has games of such a card in the pair's decks. Every filled value has the PREDICTED period, which
 the interface marks and the advisor uses without shrinking it again. Without a
 prior file for the set the dataset is left unchanged.
 """
@@ -452,6 +454,8 @@ def apply_rating_prior(data, folder=None):
             if not overall:
                 continue
             for pair in pairs:
+                if set(colors) - set(pair):
+                    continue
                 # A row missing from the dataset gets no pick order, as in
                 # the fallback period of Seventeenlands._download_with_fallback.
                 stats = deck_colors.setdefault(pair, {"alsa": 0.0, "ata": 0.0})
