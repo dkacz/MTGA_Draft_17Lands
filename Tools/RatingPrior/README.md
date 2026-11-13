@@ -82,8 +82,18 @@ python Tools/RatingPrior/build_prior.py --data DATA_DIR --out PRIOR_DIR TRK
 The app reads `<SET>_prior.json` from its `RatingPriors` folder next to `Sets`:
 `~/Library/Application Support/MTGA_Draft_Tool/RatingPriors` on macOS,
 `~/.config/MTGA_Draft_Tool/RatingPriors` on Linux and the app's folder on
-Windows. Dataset sync never writes there. `--constants` names the file of
-model constants, `learned_constants.json` next to the tool by default.
+Windows. From version 4.36 the app downloads the file into that folder from
+the `rating-priors` release of dkacz/MTGA_Draft_17Lands whenever it syncs or
+downloads a new dataset of the set, so users do not copy it by hand. A
+maintainer publishes a new or rebuilt prior file as an asset of that release:
+
+```
+gh release upload rating-priors <SET>_prior.json --clobber --repo dkacz/MTGA_Draft_17Lands
+```
+
+A file copied into the folder by hand still works until the app downloads the
+published prior file of the set, which replaces it. `--constants` names the
+file of model constants, `learned_constants.json` next to the tool by default.
 
 For each card the file holds `authors`, the reviewers' score, `weight`, the
 number of sources that rated the card, and `sources`, the card's normal score

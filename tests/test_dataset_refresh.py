@@ -8,6 +8,7 @@ import pytest
 
 from src import constants, utils
 from src.file_extractor import FileExtractor
+from src.rating_prior import _set_code
 
 
 @pytest.fixture
@@ -170,3 +171,33 @@ def test_snapshot_cleanup_failure_keeps_new_export_usable(
     assert filename
     assert utils.check_file_integrity(str(tmp_path / filename))[0] == utils.Result.VALID
     assert snapshot.exists()
+
+
+def test_export_fetches_the_sets_prior_before_the_ui_reloads(
+    extractor, tmp_path, monkeypatch
+):
+    """The prior file is fetched under the set code that load_prior later
+    reads from the exported cards, after the dataset is in place and before
+    the cache invalidation that makes the UI reload it."""
+    for card in extractor.combined_data["card_ratings"].values():
+        card["set"] = "FRA"
+    calls = []
+    monkeypatch.setattr(
+        "src.file_extractor.fetch_prior",
+        lambda set_code: calls.append(
+            (set_code, [path.name for path in tmp_path.glob("*" + constants.SET_FILE_SUFFIX)])
+        ),
+    )
+    invalidate = utils.invalidate_local_set_cache
+    monkeypatch.setattr(
+        utils, "invalidate_local_set_cache", lambda: (calls.append("reload"), invalidate())
+    )
+
+    filename = extractor.export_card_data()
+    assert calls == [(_set_code(extractor.combined_data), [filename]), "reload"]
+    assert calls[0][0] == "FRA"
+
+    # A failed export fetches nothing.
+    extractor.combined_data["card_ratings"] = {}
+    assert extractor.export_card_data() == ""
+    assert len(calls) == 2

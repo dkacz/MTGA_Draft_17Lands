@@ -262,3 +262,11 @@ def isolate_dataset_index(tmp_path, monkeypatch):
 
     monkeypatch.setattr(utils, "_index_path", lambda: str(tmp_path / "dataset_index.json"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def no_rating_prior_download(monkeypatch):
+    """Dataset downloads in tests never fetch a prior file from GitHub. Tests
+    of fetch_prior call src.rating_prior.fetch_prior, which stays real."""
+    monkeypatch.setattr("src.dataset_updater.fetch_prior", lambda *args, **kwargs: False)
+    monkeypatch.setattr("src.file_extractor.fetch_prior", lambda *args, **kwargs: False)

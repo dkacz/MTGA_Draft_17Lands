@@ -2,7 +2,8 @@
 
 Tools/RatingPrior/build_prior.py writes <SET>_prior.json from the grades that
 reviewers published before the Arena release. The file lives in
-RATING_PRIOR_FOLDER, which dataset sync never touches, and holds each rated
+RATING_PRIOR_FOLDER, into which fetch_prior downloads it from the fork's
+rating-priors release whenever a dataset of the set arrives, and holds each rated
 card's reviewers' score and per-source scores together with the constants of a
 linear model and, optionally, gradient-boosted model trees fitted on past sets.
 
@@ -31,9 +32,13 @@ prior file for the set the dataset is left unchanged.
 import json
 import logging
 import os
+import tempfile
 from array import array
 from collections import Counter, defaultdict
 from statistics import NormalDist
+from urllib.parse import quote
+
+import requests
 
 from src import constants
 from src.advisor.card_quality import is_predicted, observed_win_rate, sample_count
@@ -43,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 PRIOR_FORMAT = 1
 PRIOR_FILE_SUFFIX = "_prior.json"
+# The prior file of TRK with its model trees takes 1.8 MB.
+MAX_PRIOR_BYTES = 16 * 1024 * 1024
+# A prior file that cannot be read, parsed or validated, or a failed download.
+# Network errors of requests derive from OSError.
+PRIOR_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError)
 
 # An Arena draft has three packs of 14 cards, so a drafter makes 42 picks.
 # 17Lands gives no number of drafts, so the drafts in a dataset are its picks
@@ -187,6 +197,25 @@ def _snapshot_models(prior):
     return models
 
 
+def validate_prior(prior):
+    """The parsed prior file when the app can use it. Raises one of
+    PRIOR_ERRORS when its format, model constants, model trees or cards are
+    unusable."""
+    if prior.get("format") != PRIOR_FORMAT or not isinstance(prior.get("cards"), dict):
+        raise ValueError("unsupported prior file")
+    for key in ("mean", "sd", "scale", "pick_order_weight", "color_weight"):
+        value_at(prior[key], 0)
+    float(prior["pair_games_prior"]), float(prior["pair_persistence"])
+    has_trees = bool(_snapshot_models(prior))
+    for rated in prior["cards"].values():
+        float(rated["authors"]), float(rated.get("weight", 1.0))
+        if has_trees and not isinstance(rated.get("sources"), dict):
+            raise ValueError("model trees need each card's per-source scores")
+        for score in (rated.get("sources") or {}).values():
+            float(score)
+    return prior
+
+
 def load_prior(set_code, folder=None):
     """The prior file for the set as a dict, or None when there is none."""
     if not set_code:
@@ -198,25 +227,52 @@ def load_prior(set_code, folder=None):
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
-            prior = json.load(f)
-        if prior.get("format") != PRIOR_FORMAT or not isinstance(
-            prior.get("cards"), dict
-        ):
-            raise ValueError("unsupported prior file")
-        for key in ("mean", "sd", "scale", "pick_order_weight", "color_weight"):
-            value_at(prior[key], 0)
-        float(prior["pair_games_prior"]), float(prior["pair_persistence"])
-        has_trees = bool(_snapshot_models(prior))
-        for rated in prior["cards"].values():
-            float(rated["authors"]), float(rated.get("weight", 1.0))
-            if has_trees and not isinstance(rated.get("sources"), dict):
-                raise ValueError("model trees need each card's per-source scores")
-            for score in (rated.get("sources") or {}).values():
-                float(score)
-        return prior
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+            return validate_prior(json.load(f))
+    except PRIOR_ERRORS as error:
         logger.warning("Ignoring rating prior %s: %s", path, error)
         return None
+
+
+def fetch_prior(set_code, folder=None):
+    """Download the set's prior file from the rating-priors release into the
+    prior folder and return whether a file was installed.
+
+    The download replaces the local file only when it passes the checks of
+    load_prior, through a temporary file in the same folder, so a reader never
+    sees a partial file. A set without a published prior (HTTP 404), a failed
+    download and an unusable file leave the local file as it was.
+    """
+    if not set_code:
+        return False
+    folder = folder or constants.RATING_PRIOR_FOLDER
+    name = f"{set_code}{PRIOR_FILE_SUFFIX}"
+    tmp_path = None
+    try:
+        url = constants.RATING_PRIOR_BASE_URL + quote(name, safe="")
+        with requests.get(url, timeout=15, stream=True) as response:
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if len(content) + len(chunk) > MAX_PRIOR_BYTES:
+                    raise ValueError("prior file exceeds size limit")
+                content.extend(chunk)
+        validate_prior(json.loads(content.decode("utf-8")))
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=folder, prefix=".prior-", suffix=".tmp")
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        os.replace(tmp_path, os.path.join(folder, name))
+        tmp_path = None
+        logger.info("Installed rating prior %s", name)
+        return True
+    except PRIOR_ERRORS as error:
+        logger.warning("Kept the local rating prior for %s: %s", set_code, error)
+        return False
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def _pick_order_scores(cards):
