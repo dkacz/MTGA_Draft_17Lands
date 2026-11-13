@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from src.dataset_updater import DatasetUpdater
+from src.rating_prior import _set_code
 from src.configuration import Configuration, read_configuration, write_configuration
 
 KEY = "MH3_PremierDraft_All"
@@ -298,3 +299,38 @@ def test_auto_sync_includes_live_set_events_with_underscores(mock_get, updater, 
     mock_sync(mock_get, manifest, compressed)
     updater.sync_datasets(MagicMock())
     assert (tmp_path / (key + "_Data.json")).read_bytes() == payload
+
+
+@patch("src.dataset_updater.requests.get")
+def test_sync_fetches_the_prior_once_for_each_set_with_a_new_dataset(
+    mock_get, updater, tmp_path, monkeypatch
+):
+    """The prior file is fetched under the set code that load_prior later
+    reads from the synced dataset's cards, and only for sets whose datasets
+    this sync installed."""
+    data = {
+        "meta": {"version": 3, "start_date": "2026-01-01", "end_date": "2026-01-02"},
+        "card_ratings": {
+            str(i): {"name": f"Card {i}", "set": "MH3", "deck_colors": {"All Decks": {"gihwr": 50}}}
+            for i in range(10)
+        },
+    }
+    compressed = gzip.compress(json.dumps(data).encode())
+    keys = [KEY, "MH3_ArenaDirect_Sealed_All", "OTJ_PremierDraft_All"]
+    datasets = {key: file_info(compressed, key + "_Data.json.gz") for key in keys}
+    # The OTJ dataset is already current, so this sync installs nothing of OTJ.
+    (tmp_path / "OTJ_PremierDraft_All_Data.json").write_bytes(b"current")
+    updater.save_local_manifest({"datasets": {keys[2]: datasets[keys[2]]}})
+    manifest = {"active_sets": ["MH3", "OTJ"], "datasets": datasets}
+    mock_get.side_effect = [MagicMock(status_code=200, json=lambda: {}),
+                           MagicMock(json=lambda: manifest),
+                           stream_response(compressed), stream_response(compressed)]
+    fetch = MagicMock(return_value=True)
+    monkeypatch.setattr("src.dataset_updater.fetch_prior", fetch)
+    progress = MagicMock()
+
+    updater.sync_datasets(progress)
+
+    fetch.assert_called_once_with(_set_code(data))
+    assert fetch.call_args.args == ("MH3",)
+    progress.assert_called_with("Datasets updated successfully.")

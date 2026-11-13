@@ -18,6 +18,7 @@ from typing import Dict
 from src import constants
 from src.advisor.card_features import get_own_token_creation_text
 from src.logger import create_logger
+from src.rating_prior import fetch_prior
 from src.utils import Result, check_file_integrity, clean_string
 from src.ui_progress import UIProgress
 from src.seventeenlands import Seventeenlands
@@ -1719,6 +1720,10 @@ class FileExtractor(UIProgress):
                             )
             except OSError as error:
                 logger.warning("Could not list old dataset snapshots: %s", error)
+
+            # The set's prior file, if published, is in place before the UI
+            # reloads the new dataset. fetch_prior logs its own failures.
+            fetch_prior(self.selected_sets.seventeenlands[0])
 
             from src.utils import invalidate_local_set_cache
 

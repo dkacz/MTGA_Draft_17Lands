@@ -4,6 +4,11 @@
 
 [Download this fork's releases](https://github.com/dkacz/MTGA_Draft_17Lands/releases/latest).
 
+Version 4.36 downloads the prior file of a set from this fork's rating-priors
+release whenever the app syncs or downloads a new dataset of the set, so the
+predicted GIH WR no longer requires copying the file into the RatingPriors
+folder by hand.
+
 Version 4.35 predicts a GIH WR in a color pair only for cards whose colors lie
 within the pair and for colorless cards.
 

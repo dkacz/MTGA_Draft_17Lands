@@ -1,8 +1,11 @@
 import copy
 import json
+import os
 from statistics import NormalDist
+from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from src import constants, rating_prior
 from src.advisor.card_quality import FALLBACK_SAMPLE_CAP, SAMPLE_PRIOR, blended_win_rate
@@ -280,6 +283,96 @@ def test_unusable_prior_file_is_ignored(tmp_path):
     data = dataset(card("A"))
     assert apply_rating_prior(data, tmp_path) is None
     assert overall(data, 0)["gihwr"] == 0.0
+
+
+def prior_response(content=b"", status=200, error=None):
+    """A streamed requests response that yields the content in two chunks."""
+    response = MagicMock(status_code=status)
+    response.__enter__.return_value = response
+    if status >= 400:
+        response.raise_for_status.side_effect = requests.HTTPError(str(status))
+    middle = len(content) // 2
+    response.iter_content.side_effect = (
+        error if error else lambda chunk_size: iter([content[:middle], content[middle:]])
+    )
+    return response
+
+
+def mock_download(monkeypatch, response):
+    get = MagicMock(
+        side_effect=response if isinstance(response, Exception) else None,
+        return_value=response,
+    )
+    monkeypatch.setattr(rating_prior.requests, "get", get)
+    return get
+
+
+def test_fetch_prior_installs_a_valid_download_atomically(tmp_path, monkeypatch):
+    folder = tmp_path / "RatingPriors"
+    content = json.dumps(dict(PRIOR, cards={"A": {"authors": 1.0}})).encode()
+    get = mock_download(monkeypatch, prior_response(content))
+    real_replace, replaced = rating_prior.os.replace, []
+
+    def replace(source, destination):
+        replaced.append((source, destination))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(rating_prior.os, "replace", replace)
+
+    assert rating_prior.fetch_prior("TST", folder) is True
+    assert get.call_args.args == (constants.RATING_PRIOR_BASE_URL + "TST_prior.json",)
+    assert get.call_args.kwargs["stream"] and get.call_args.kwargs["timeout"]
+    # The file appears complete under its name: one rename from a temporary
+    # file in the same folder, which is gone afterwards.
+    [(source, destination)] = replaced
+    assert destination == str(folder / "TST_prior.json")
+    assert os.path.dirname(source) == str(folder)
+    assert [path.name for path in folder.iterdir()] == ["TST_prior.json"]
+    assert rating_prior.load_prior("TST", folder)["cards"] == {"A": {"authors": 1.0}}
+
+
+def test_fetch_prior_installs_nothing_for_a_set_without_a_prior(tmp_path, monkeypatch):
+    folder = tmp_path / "RatingPriors"
+    mock_download(monkeypatch, prior_response(b"Not Found", status=404))
+    assert rating_prior.fetch_prior("XXX", folder) is False
+    assert not folder.exists()
+
+
+def existing_prior(folder):
+    folder.mkdir()
+    write_prior(folder, {"A": {"authors": 2.0}})
+    return (folder / "TST_prior.json").read_bytes()
+
+
+@pytest.mark.parametrize("download", ["json", "prior", "size"])
+def test_an_unusable_download_keeps_the_local_prior(download, tmp_path, monkeypatch):
+    folder = tmp_path / "RatingPriors"
+    before = existing_prior(folder)
+    content = {
+        "json": b'{"format": 1, "cards":',
+        "prior": json.dumps(dict(PRIOR, cards=[])).encode(),
+        "size": json.dumps(dict(PRIOR, cards={"B": {"authors": 1.0}})).encode(),
+    }[download]
+    if download == "size":
+        monkeypatch.setattr(rating_prior, "MAX_PRIOR_BYTES", len(content) - 1)
+    mock_download(monkeypatch, prior_response(content))
+    assert rating_prior.fetch_prior("TST", folder) is False
+    assert (folder / "TST_prior.json").read_bytes() == before
+    assert [path.name for path in folder.iterdir()] == ["TST_prior.json"]
+
+
+@pytest.mark.parametrize("failure", ["connection", "server", "stream"])
+def test_a_failed_download_keeps_the_local_prior(failure, tmp_path, monkeypatch):
+    folder = tmp_path / "RatingPriors"
+    before = existing_prior(folder)
+    mock_download(monkeypatch, {
+        "connection": requests.ConnectionError("offline"),
+        "server": prior_response(status=500),
+        "stream": prior_response(error=requests.exceptions.ChunkedEncodingError("cut")),
+    }[failure])
+    assert rating_prior.fetch_prior("TST", folder) is False
+    assert (folder / "TST_prior.json").read_bytes() == before
+    assert [path.name for path in folder.iterdir()] == ["TST_prior.json"]
 
 
 def test_a_prediction_is_not_shrunk_again_and_anchors_small_samples():

@@ -14,6 +14,7 @@ import requests
 from src import constants
 from src.configuration import CONFIG_LOCK
 from src.dataset_manifest import validate_manifest
+from src.rating_prior import fetch_prior
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class DatasetUpdater:
             active_set_codes = set(active_sets)
             local_manifest = self.get_local_manifest()
             updates_made = False
+            updated_sets = set()
             failures = 0
 
             for key, file_info in remote_manifest["datasets"].items():
@@ -198,6 +200,9 @@ class DatasetUpdater:
                         os.replace(tmp_path, self._destination(local_filename))
                     local_manifest["datasets"][key] = file_info
                     updates_made = True
+                    # A prior file is named after the set code that its
+                    # datasets' cards carry, in upper case.
+                    updated_sets.add(key.split("_", 1)[0].upper())
                 except Exception as error:
                     failures += 1
                     logger.error(f"Rejected dataset {key}; kept cached data: {error}")
@@ -208,6 +213,10 @@ class DatasetUpdater:
             if "active_sets" in remote_manifest:
                 local_manifest["active_sets"] = remote_manifest["active_sets"]
             self.save_local_manifest(local_manifest)
+            # A set's prior file arrives with its datasets. fetch_prior logs
+            # its own failures and leaves the sync's outcome unchanged.
+            for set_code in sorted(updated_sets):
+                fetch_prior(set_code)
             if failures:
                 progress_callback(f"Skipped {failures} dataset update(s). Kept cached data.")
             elif updates_made:

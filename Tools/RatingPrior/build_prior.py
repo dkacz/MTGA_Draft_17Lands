@@ -6,7 +6,9 @@ Usage:
 
 DATA_DIR/ratings/<SET>.csv comes from collect_ratings.py. The tool writes
 PRIOR_DIR/<SET>_prior.json, which the app reads from its RatingPriors folder
-(src/rating_prior.py). The file is private and must stay outside the repository.
+(src/rating_prior.py). The file is published as an asset of the fork's
+rating-priors release, from which the app downloads it, and is not committed
+to the repository.
 
 Each card's reviewers' score comes from the grades published before the Arena
 release by the sources that learned_constants.json weights, the Limited

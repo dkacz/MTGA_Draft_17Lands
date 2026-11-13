@@ -32,9 +32,9 @@ def get_resource_dir():
 BASE_DIR = get_base_dir()
 RESOURCE_DIR = get_resource_dir()
 
-APPLICATION_VERSION = "4.35"
-OLD_APPLICATION_VERSION = "4.34"
-PREVIOUS_APPLICATION_VERSION = "0434"
+APPLICATION_VERSION = "4.36"
+OLD_APPLICATION_VERSION = "4.35"
+PREVIOUS_APPLICATION_VERSION = "0435"
 
 FONT_SANS_SERIF = "Arial"
 FONT_MONO_SPACE = "Courier"
@@ -397,8 +397,13 @@ SETS_FOLDER = os.path.join(BASE_DIR, "Sets")
 SET_FILE_SUFFIX = "Data.json"
 
 # Prior files (<SET>_prior.json) with the reviewers' pre-release card ratings,
-# built by Tools/RatingPrior/build_prior.py. Dataset sync never writes here.
+# built by Tools/RatingPrior/build_prior.py and published as assets of the
+# fork's rating-priors release. When a dataset of a set arrives, the app
+# downloads the set's prior file from there into RATING_PRIOR_FOLDER.
 RATING_PRIOR_FOLDER = os.path.join(BASE_DIR, "RatingPriors")
+RATING_PRIOR_BASE_URL = (
+    "https://github.com/dkacz/MTGA_Draft_17Lands/releases/download/rating-priors/"
+)
 
 SCRYFALL_REQUEST_BACKOFF_DELAY_SECONDS = 5
 SCRYFALL_REQUEST_ATTEMPT_MAX = 5

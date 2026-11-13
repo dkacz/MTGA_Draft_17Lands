@@ -1,3 +1,6 @@
+===================== RELEASE NOTES 4.36 (FRA fork) =====================
+* dkacz: The app now downloads the prior file of a set by itself, so the predicted GIH WR of cards that 17Lands has not rated yet no longer requires copying the file into the RatingPriors folder by hand. Whenever the app syncs a new dataset of a set or downloads a dataset from 17Lands, it fetches the set's prior file from the fork's rating-priors release on GitHub. For a set without a published prior file, after a failed download and for a file that the app cannot use, the RatingPriors folder stays as it was, and the app works as in 4.35.
+
 ===================== RELEASE NOTES 4.35 (FRA fork) =====================
 * dkacz: A predicted GIH WR in a color pair is now given only to cards whose colors all lie within the pair and to colorless cards. A card with a color outside the pair keeps no value in that pair's view, as on 17Lands, so it no longer appears there as a strong pick.
 
